@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 
 export const signUp = async (email: string, password: string) => {
   return await supabase.auth.signUp({ email, password })
@@ -14,7 +15,7 @@ export const signOut = async () => {
 
 export const resetPassword = async (email: string) => {
   return await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin + '/update-password'
+    redirectTo: `${window.location.origin}/update-password`,
   })
 }
 
@@ -26,6 +27,8 @@ export const getSession = async () => {
   return await supabase.auth.getSession()
 }
 
-export const onAuthStateChange = (callback: (event: any, session: any) => void) => {
+export const onAuthStateChange = (
+  callback: (event: AuthChangeEvent, session: Session | null) => void
+) => {
   return supabase.auth.onAuthStateChange(callback)
 }
