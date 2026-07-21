@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — SiteBrief Technical Architecture
 
-**Status: Approved for implementation (PWA Pivot + Safety Addendum)**
+**Status: Approved for implementation (Final DB/Auth/Billing Correction)**
 **Last updated: July 21, 2026**
 
 **Canonical production origin:** `https://sitebrief.scope-guard.com`
@@ -14,8 +14,6 @@
 
 - **Frontend:** React + Vite + TypeScript (strict mode)
 - **Routing:** React Router
-- **Design:** Mobile-first responsive (360 px and up). Minimal accessible component system — no large design framework.
-- **PWA:** Manifest and service-worker shell caching (no offline sync).
 - **Backend:** Supabase Auth, Postgres, Storage, Edge Functions. Row Level Security on all user-owned tables and storage.
 - **Billing:** Stripe Checkout, Billing, Customer Portal. Signed Stripe webhooks.
 - **Hosting:** Cloudflare Pages (preferred).
@@ -23,124 +21,308 @@
 
 ---
 
-## 2. DATA MODEL & RLS
+## 2. DATABASE SCHEMA
 
-Every user-owned row must include `user_id` and enforce ownership via RLS.
+The following exact objects are specified for the initial migration (`supabase/migrations/001_initial.sql`).
 
-### Schema
+### 1. profiles
+- `id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE`
+- `display_name TEXT`
+- `created_at`, `updated_at` timestamps
+- **RLS uses `auth.uid() = id`, NOT `user_id`** — this table has no `user_id` column.
 
-- **profiles:** `id` (UUID, FK to auth.users), `display_name`, `created_at`
-- **company_profiles:** `id`, `user_id` (FK, unique), `company_name`, `logo_url`, `phone`, `email`, `brand_color`, `onboarding_complete`, `created_at`, `updated_at`
-- **projects:** `id`, `user_id`, `name`, `customer_name`, `address`, `customer_email`, `customer_phone`, `is_archived` (default false), `created_at`, `updated_at`
-- **project_report_counters:** `project_id` (UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE), `last_report_number` (INTEGER NOT NULL DEFAULT 0)
-- **reports:** `id`, `user_id`, `project_id`, `report_number` (Integer), `is_draft`, `work_completed`, `problems`, `next_steps`, `generated_pdf_url`, `generated_at`, `created_at`, `updated_at`. `UNIQUE(project_id, report_number)`
-- **report_photos:** `id`, `user_id`, `report_id`, `storage_path` (relative Supabase Storage path), `display_order`, `caption`, `created_at`
-- **subscriptions:** `id`, `user_id` (unique), `stripe_customer_id`, `stripe_subscription_id`, `status` (enum: trialing | active | past_due | canceled | unpaid), `current_period_end`, `cancel_at_period_end`, `trial_end`, `created_at`, `updated_at`
-- **stripe_webhook_events:** `id` (TEXT PRIMARY KEY, Stripe event ID), `type` (TEXT NOT NULL), `processed_at` (TIMESTAMPTZ NOT NULL DEFAULT now())
+### 2. company_profiles
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
+- `company_name TEXT NOT NULL`, `phone TEXT`, `email TEXT`, `brand_color TEXT`
+- `logo_storage_path TEXT` — stable Supabase Storage path, NEVER a signed or expiring URL
+- `onboarding_complete BOOLEAN NOT NULL DEFAULT false`
+- `created_at`, `updated_at` timestamps
 
-### Report Number Allocation (Per-Project)
-Do NOT use `SELECT MAX(report_number) + 1` or bare Postgres sequences. Allocate report numbers via an atomic `INSERT ... ON CONFLICT DO UPDATE`:
+### 3. projects
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
+- `name TEXT NOT NULL`, `customer_name TEXT NOT NULL`, `address TEXT NOT NULL`, `customer_email TEXT`, `customer_phone TEXT`
+- `is_archived BOOLEAN NOT NULL DEFAULT false`
+- `created_at`, `updated_at` timestamps
+- `UNIQUE(id, user_id)` — required for composite foreign key references from child tables
+
+### 4. project_report_counters
+- `project_id UUID NOT NULL`
+- `user_id UUID NOT NULL`
+- `last_report_number INTEGER NOT NULL DEFAULT 0`
+- `PRIMARY KEY(project_id)`
+- `FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id)`
+- No direct browser access (no RLS policies; access only through privileged functions)
+
+### 5. reports
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
+- `project_id UUID NOT NULL`
+- `report_number INTEGER NOT NULL`
+- `is_draft BOOLEAN NOT NULL DEFAULT true`
+- `work_completed TEXT`, `problems TEXT`, `next_steps TEXT`
+- `generated_pdf_storage_path TEXT` — stable Supabase Storage path, NEVER a signed or expiring URL
+- `generated_at TIMESTAMPTZ`
+- `created_at`, `updated_at` timestamps
+- `UNIQUE(id, user_id)`
+- `UNIQUE(project_id, report_number)` — final atomicity guard
+- `FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id)`
+- `report_number` is immutable after creation (enforced with trigger)
+
+### 6. report_photos
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
+- `report_id UUID NOT NULL`
+- `storage_path TEXT NOT NULL` — relative Supabase Storage path
+- `display_order INTEGER NOT NULL`
+- `caption TEXT`
+- `created_at`, `updated_at` timestamps
+- `FOREIGN KEY (report_id, user_id) REFERENCES reports(id, user_id)`
+- `UNIQUE(report_id, display_order)` — ordering constraint
+
+### 7. subscriptions
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
+- `stripe_customer_id TEXT UNIQUE` — uniqueness prevents duplicate customer mapping
+- `stripe_subscription_id TEXT UNIQUE` — uniqueness prevents duplicate subscription rows
+- `status TEXT NOT NULL CHECK (status IN ('trialing','active','past_due','canceled','unpaid'))`
+- `trial_end TIMESTAMPTZ`
+- `current_period_end TIMESTAMPTZ NOT NULL`
+- `cancel_at_period_end BOOLEAN NOT NULL DEFAULT false`
+- `stripe_event_created_at TIMESTAMPTZ` — used for out-of-order event protection
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+- `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+### 8. stripe_webhook_events
+- `stripe_event_id TEXT PRIMARY KEY` — Stripe event ID (evt_xxx)
+- `event_type TEXT NOT NULL`
+- `stripe_created_at TIMESTAMPTZ NOT NULL` — from event.created
+- `processed_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+- `processing_error TEXT`
+
+---
+
+## 3. ROW LEVEL SECURITY
+
+Explicit named policies per operation per table are required. Generic `FOR ALL USING` policies are prohibited.
+
+### profiles
+- **SELECT:** `auth.uid() = id`
+- **INSERT:** `auth.uid() = id` (called once on sign-up)
+- **UPDATE:** `auth.uid() = id`
+- **DELETE:** not permitted directly (CASCADE from auth.users)
+
+### company_profiles
+- **SELECT:** `auth.uid() = user_id`
+- **INSERT:** `auth.uid() = user_id`
+- **UPDATE:** `auth.uid() = user_id`
+- **DELETE:** not permitted directly
+
+### projects
+- **SELECT:** `auth.uid() = user_id`
+- **INSERT:** `auth.uid() = user_id`
+- **UPDATE:** `auth.uid() = user_id`
+- **DELETE:** not permitted directly in MVP (archive instead)
+
+### project_report_counters
+- No direct browser policies. Access only through `create_report()` privileged function.
+
+### reports
+- **SELECT:** `auth.uid() = user_id` — always permitted regardless of subscription state.
+- **INSERT:** PROHIBITED for browser clients. All inserts go through `create_report()`.
+- **UPDATE:** `auth.uid() = user_id AND public.has_active_access()`
+- **DELETE:** not permitted directly in MVP
+
+### report_photos
+- **SELECT:** `auth.uid() = user_id`
+- **INSERT:** `auth.uid() = user_id AND public.has_active_access()`
+- **UPDATE:** `auth.uid() = user_id AND public.has_active_access()`
+- **DELETE:** `auth.uid() = user_id AND public.has_active_access()`
+
+### subscriptions
+- **SELECT:** `auth.uid() = user_id` — read own row only
+- **INSERT, UPDATE, DELETE:** PROHIBITED for browser clients (Edge Functions use service-role)
+
+### stripe_webhook_events
+- No browser policies at all.
+
+---
+
+## 4. PRIVILEGED FUNCTIONS
+
+### Subscription Access Function
 ```sql
-INSERT INTO project_report_counters (project_id, last_report_number)
-VALUES ($project_id, 1)
-ON CONFLICT (project_id) DO UPDATE
-  SET last_report_number = project_report_counters.last_report_number + 1
-RETURNING last_report_number
+CREATE OR REPLACE FUNCTION public.has_active_access()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.subscriptions s
+    WHERE s.user_id = auth.uid()
+      AND (
+        (s.status = 'trialing' AND s.trial_end > now())
+        OR
+        (s.status = 'active' AND s.current_period_end > now())
+      )
+  )
+$$;
+
+REVOKE ALL ON FUNCTION public.has_active_access() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.has_active_access() TO authenticated;
 ```
-This logic MUST be wrapped in a `SECURITY DEFINER` Postgres function that:
-- Verifies `auth.uid()` owns the project before allocating.
-- Sets a fixed `search_path` (e.g., `SET search_path = public`).
-- Validates all inputs and restricts execution to authenticated roles.
-- Allocates the number and creates the report row in one transaction.
 
-### RLS Policies
-- All SELECT, INSERT, UPDATE, DELETE on every table restricted to `auth.uid() = user_id`.
-- Storage bucket policies: user can read/write only paths prefixed with their `user_id/`.
-- `subscriptions` table: only Edge Functions (service role) may write; user may read their own row.
+### Atomic Report Creation Function
+```sql
+CREATE OR REPLACE FUNCTION public.create_report(p_project_id UUID)
+RETURNS TABLE (report_id UUID, report_number INTEGER)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_number  INTEGER;
+  v_report_id UUID;
+BEGIN
+  -- 1. Require authenticated user
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  -- 2. Verify has_active_access()
+  IF NOT public.has_active_access() THEN
+    RAISE EXCEPTION 'Active subscription required';
+  END IF;
+
+  -- 3. Verify caller owns the project
+  IF NOT EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id = p_project_id AND p.user_id = v_user_id
+  ) THEN
+    RAISE EXCEPTION 'Project not found or not owned by caller';
+  END IF;
+
+  -- 4. Atomically allocate report number
+  INSERT INTO public.project_report_counters (project_id, user_id, last_report_number)
+  VALUES (p_project_id, v_user_id, 1)
+  ON CONFLICT (project_id) DO UPDATE
+    SET last_report_number = public.project_report_counters.last_report_number + 1
+  RETURNING last_report_number INTO v_number;
+
+  -- 5. Insert draft report
+  INSERT INTO public.reports (
+    user_id, project_id, report_number, is_draft
+  ) VALUES (
+    v_user_id, p_project_id, v_number, true
+  )
+  RETURNING id INTO v_report_id;
+
+  -- 6. Return
+  RETURN QUERY SELECT v_report_id, v_number;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_report(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.create_report(UUID) TO authenticated;
+```
+
+### Immutable Report Number Trigger
+```sql
+CREATE OR REPLACE FUNCTION public.prevent_report_number_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.report_number IS DISTINCT FROM OLD.report_number THEN
+    RAISE EXCEPTION 'report_number is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_reports_immutable_number
+  BEFORE UPDATE ON public.reports
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_report_number_change();
+```
 
 ---
 
-## 3. SUBSCRIPTION ACCESS MODEL
+## 5. SUPABASE STORAGE
 
-**Application access states (simplified):**
-- `LOADING` — checking Supabase session and subscriptions row
-- `TRIAL_OR_PAID` — status is 'trialing' or 'active'; full create/generate access
-- `EXPIRED` — status is 'past_due', 'canceled', 'unpaid', or no row; read-only
-- `BILLING_UNAVAILABLE` — Supabase query failed; show cached state or block
+**Bucket structure:** Single private bucket named `user-content`.
+**Path model:**
+- `users/{userId}/logos/{filename}`
+- `users/{userId}/reports/{reportId}/photos/{filename}`
+- `users/{userId}/reports/{reportId}/pdfs/{filename}`
 
-**Billing Outage Safety:**
-- A Stripe or billing service outage must NEVER delete or invalidate existing records in the `subscriptions` table.
-- Access is determined by the last server-verified state (`status` + `current_period_end`), not live API calls.
-- If the subscriptions query fails at session start, state is `BILLING_UNAVAILABLE`. Show a retryable status message rather than defaulting to `EXPIRED`.
-- Existing reports remain readable in all states (including `BILLING_UNAVAILABLE`).
-- New report creation requires stored status `trialing` or `active` AND current time is before `current_period_end`.
+### Storage RLS Policies (on `storage.objects`)
 
----
+- **Logo read (SELECT):** `(storage.foldername(name))[1] = 'users' AND (storage.foldername(name))[2] = auth.uid()::text AND (storage.foldername(name))[3] = 'logos'`
+- **Logo write (INSERT/UPDATE):** Path check PLUS `auth.uid() IS NOT NULL`
+- **Report photo read (SELECT):** Path prefix matches `users/{auth.uid()}/reports/`
+- **Report photo write (INSERT/UPDATE/DELETE):** Path prefix matches `users/{auth.uid()}/reports/` AND `public.has_active_access()`
+- **Report PDF read (SELECT):** Path prefix matches `users/{auth.uid()}/reports/`
+- **Report PDF write (INSERT):** Path prefix matches `users/{auth.uid()}/reports/` AND `public.has_active_access()`
 
-## 4. STRIPE EDGE FUNCTIONS (Server-side)
-
-1. **`create-checkout-session`**
-   - Requires authenticated Supabase user (validate JWT).
-   - Must explicitly set: `mode: 'subscription'`, `subscription_data: { trial_period_days: 14 }`, and `payment_method_collection: 'always'` (required before trial begins).
-   - Accepts only 'monthly' or 'annual' as price selection. Maps these server-side to `STRIPE_MONTHLY_PRICE_ID` and `STRIPE_ANNUAL_PRICE_ID`. Never accept arbitrary price IDs from the browser.
-   - Creates or reuses Stripe Customer (lookup `stripe_customer_id` from subscriptions). Returns URL.
-
-2. **`stripe-webhook`**
-   - Public endpoint. Verifies Stripe-Signature header.
-   - **Idempotency:** Attempt to INSERT event ID into `stripe_webhook_events`. If INSERT fails (duplicate), return HTTP 200 immediately. If succeeds, process event and update subscriptions.
-   - Handle out-of-order events using `updated_at` timestamps to avoid downgrading newer states.
-   - Store `stripe_subscription_id` and `stripe_customer_id` only from verified API data.
-   - Always return HTTP 200 for safely ignored or duplicate events.
-
-3. **`create-portal-session`**
-   - Requires authenticated Supabase user. Looks up `stripe_customer_id`.
-   - Returns short-lived Stripe Customer Portal URL.
+*Note:* Signed URLs are generated on demand for sharing, NEVER persisted in Postgres. `logo_storage_path` and `generated_pdf_storage_path` store the stable object key. File type and size validation is done in the browser; Storage policies are the authoritative security control.
 
 ---
 
-## 5. SUPABASE KEY BOUNDARIES
+## 6. STRIPE INTEGRATION
 
-- The browser bundle may contain ONLY the Supabase anon/publishable key (`VITE_SUPABASE_ANON_KEY`).
-- The Supabase service-role key bypasses all RLS. It must exist ONLY in Supabase Edge Function secrets.
-- The service-role key must NEVER appear in: `VITE_` env vars, `src/` files, `.env.local`, error responses, or server logs.
-- Edge Functions that require elevated access must import the service-role key from `Deno.env.get()` exclusively.
+### Webhooks Processing Sequence
+1. Receive POST to `stripe-webhook` Edge Function.
+2. Read raw request body (required for signature verification).
+3. Verify `Stripe-Signature` header against raw body using `STRIPE_WEBHOOK_SECRET`. Reject with 400 if invalid.
+4. Parse `event.id`, `event.type`, `event.created`.
+5. Attempt INSERT into `stripe_webhook_events`. If duplicate, return 200 immediately.
+6. For subscription events:
+   a. Retrieve canonical subscription object directly from Stripe API.
+   b. Compare `event.created` against `subscriptions.stripe_event_created_at`.
+   c. Upsert `subscriptions` row via service-role client (only if `event.created > stripe_event_created_at`).
+   d. Record success or update `processing_error`.
+7. Return 200 for all safely handled cases.
+8. NEVER erase a valid stored subscription record due to an outage.
+
+### Trial Configuration
+- Stripe Prices contain only recurring amounts: Monthly $9.99, Annual $79.99.
+- Checkout Session Edge Function must explicitly set:
+  - `mode: 'subscription'`
+  - `subscription_data.trial_period_days: 14`
+  - `payment_method_collection: 'always'`
+- Price IDs come from server-side env vars (`STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID`). Browser submits only `'monthly'` or `'annual'`.
+- Return URLs are hard-coded server-side (browser cannot supply them):
+  - `success_url: https://sitebrief.scope-guard.com/billing/success`
+  - `cancel_url:  https://sitebrief.scope-guard.com/billing/cancel`
 
 ---
 
-## 6. PHOTO PIPELINE
+## 7. AUTHENTICATION SCOPE
 
-- **Input:** Mobile browser file input (`<input type="file" accept="image/*" capture="environment">`).
-- **Processing:** Client-side compression before upload.
-- **Targets:** Long-edge 1200 px. Preferred: ≤ 200 KB. Accepted hard maximum: 400 KB.
-- **Retry Logic:** Iteratively reduce JPEG quality (step down by 0.05) and dimensions (step down long-edge by 100px).
-- **Failure:** If the file still cannot reach ≤ 400 KB after retries, reject the photo and show: "This photo could not be compressed to an acceptable size. Please select a different image."
-- **Orientation:** The pipeline must produce correct visual orientation after processing. `expo-image-manipulator` (or equivalent web library) auto-corrects EXIF. Original EXIF metadata is NOT preserved.
+**Approved Scope:** Email/password sign-up, email confirmation, login, logout, forgot-password, password update.
+**Not in Scope:** Magic link / passwordless authentication.
+
+**Public launch requires a custom SMTP provider in Supabase.** The demo provider is not authorized for launch.
 
 ---
 
-## 7. PDF PIPELINE
+## 8. MIGRATION DELIVERY RULES
 
-- **Generator:** Client-side with `@react-pdf/renderer`.
-- **Output:** Generate as Blob — never base64-encode the completed PDF.
-- **Distribution:** Web Share API when `navigator.canShare({ files })` is true. Download fallback when unavailable.
-
----
-
-## 8. SERVICE WORKER CACHE EXCLUSIONS
-
-The PWA service worker may cache:
-✅ Versioned JS bundles, CSS, icons, manifest, static app shell HTML.
-
-The service worker must NOT cache:
-❌ Supabase API responses (`*.supabase.co`)
-❌ Authentication callbacks or session tokens
-❌ Stripe redirects or Stripe API responses
-❌ Supabase Storage signed URLs or photo blobs
-❌ User photographs or uploaded files
-❌ Generated reports or PDFs
-❌ Any authenticated HTML response
-
-*Note: IndexedDB handles local draft recovery.*
+- The migration file (`supabase/migrations/001_initial.sql`) is the single source of truth.
+- No ad hoc, unrecorded production SQL is ever to be run directly.
+- Execution occurs only after:
+  1. The migration is reviewed and committed to the repository.
+  2. The Supabase project exists.
+  3. The human owner has linked the local CLI to the project.
+  4. A rollback approach is documented.
+- The architect and implementation agent **do not execute migrations**. Only the human owner applies migrations to production.
 
 ---
 
@@ -148,10 +330,7 @@ The service worker must NOT cache:
 
 Configure the following in the Supabase dashboard under **Authentication → URL Configuration**:
 
-**Site URL:**
-```
-https://sitebrief.scope-guard.com
-```
+**Site URL:** `https://sitebrief.scope-guard.com`
 
 **Allowed Redirect URLs:**
 ```
@@ -162,16 +341,7 @@ https://sitebrief.scope-guard.com/billing/success
 https://sitebrief.scope-guard.com/billing/cancel
 http://localhost:5173/**
 ```
-
-Note: `https://*.pages.dev/**` may be added for Cloudflare preview deployments if Supabase supports wildcard subdomains — verify in the Supabase dashboard before adding.
-
-**Stripe return URLs** (server-constructed — never from browser input):
-```
-success_url: https://sitebrief.scope-guard.com/billing/success
-cancel_url:  https://sitebrief.scope-guard.com/billing/cancel
-```
-
-The `create-checkout-session` Edge Function must construct these URLs from the hard-coded production origin (`https://sitebrief.scope-guard.com`). The browser must NOT supply a redirect destination.
+*Note: Stripe return URLs are constructed server-side.*
 
 ---
 
@@ -180,40 +350,16 @@ The `create-checkout-session` Edge Function must construct these URLs from the h
 **Production URL:** `https://sitebrief.scope-guard.com`
 
 ### Vite and Router Configuration
-- `vite.config.ts` base remains `"/"` — SiteBrief is at the root of its subdomain.
+- `vite.config.ts` base remains `"/"`.
 - React Router uses no `basename`.
 - PWA manifest `start_url` is `"/"` and `scope` is `"/"`.
-- Do not add `/sitebrief` prefixes anywhere in routes, assets, or manifests.
-
-### Cloudflare Pages Project Setup
-1. Create a **dedicated SiteBrief Pages project** in the Cloudflare dashboard.
-2. Connect only the **SiteBrief GitHub repository** — do not connect the scope-guard.com repository.
-3. Complete one successful `*.pages.dev` deployment and verify the build.
-4. In **Pages → Custom domains**, add `sitebrief.scope-guard.com`.
-5. If scope-guard.com DNS is already managed by Cloudflare, let Pages create the CNAME automatically.
-6. If DNS is managed elsewhere, create the required CNAME **only after** associating the custom domain in the Pages dashboard — do not add DNS records before Pages confirms the domain.
 
 ### SPA Routing
 - `public/_redirects` must contain: `/* /index.html 200`
-- Direct browser navigation to `/projects`, `/projects/:id`, `/reports/:id`, `/settings`, `/billing` must serve the app shell.
-- Do NOT add a top-level `404.html` unless a complete custom redirect table replaces the fallback.
-- `public/_headers` provides security headers (Content-Security-Policy, X-Frame-Options, etc.).
+- Direct browser navigation to root paths must serve the app shell.
+- No top-level `404.html`.
+- `public/_headers` provides security headers.
 
 ### Edge Function CORS
 Authenticated and billing Edge Functions must restrict `Access-Control-Allow-Origin` to:
-```
-https://sitebrief.scope-guard.com
-```
-And explicitly for local development:
-```
-http://localhost:5173
-```
-Do NOT use `Access-Control-Allow-Origin: *` for authenticated or billing functions.
-
----
-
-## 11. OFFLINE POSITION
-
-- Application requires connectivity for auth, data, billing.
-- Local draft recovery uses IndexedDB for the current editor session. No bidirectional offline sync engine.
-- Retain draft until retry succeeds.
+`https://sitebrief.scope-guard.com` (and `http://localhost:5173` for dev). Do NOT use `*`.

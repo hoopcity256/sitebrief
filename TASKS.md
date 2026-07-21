@@ -8,9 +8,9 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 - [x] Pivot architecture documentation to PWA/Supabase/Stripe
 - [x] Create Vite + React + TypeScript project
 - [x] Configure React Router and mobile-first design shell
-- [ ] Create Supabase project, run schema migrations, enable RLS (include `project_report_counters`)
+- [ ] Draft Supabase schema migrations `001_initial.sql` (do not run)
 - [ ] Configure Supabase allowed redirect URLs
-- [x] Implement Supabase Auth
+- [ ] Implement Supabase Auth (email/password, confirmation, reset)
 - [ ] Deploy staging URL to Cloudflare Pages
 
 ## Day 3 — Core App
@@ -63,3 +63,9 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 | H8 | Set Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID` | Human | ⬜ Not started |
 | H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
 | H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add env vars `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
+| HA-AUTH-1 | Configure custom SMTP provider in Supabase (Auth → SMTP Settings) | Human | ⬜ Not started |
+| HA-AUTH-2 | Verify sender domain/address with SMTP provider | Human | ⬜ Not started |
+| HA-AUTH-3 | Customize confirmation email template | Human | ⬜ Not started |
+| HA-AUTH-4 | Customize password-reset email template | Human | ⬜ Not started |
+| HA-AUTH-5 | Set Site URL to `https://sitebrief.scope-guard.com` in Supabase Auth settings | Human | ⬜ Not started |
+| HA-AUTH-6 | Configure allowed redirect URLs per ARCHITECTURE.md §9 | Human | ⬜ Not started |

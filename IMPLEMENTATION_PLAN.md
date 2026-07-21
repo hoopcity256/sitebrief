@@ -11,9 +11,9 @@
 - Architecture pivot documentation complete.
 - Create Vite + React + TypeScript project.
 - Configure React Router and mobile-first design shell.
-- Create Supabase project, run schema migrations (including `project_report_counters`), enable RLS.
+- Draft Supabase schema migrations as `supabase/migrations/001_initial.sql` (single source of truth). Do NOT execute SQL automatically.
 - Configure Supabase Auth: Site URL `https://sitebrief.scope-guard.com`; allowed redirect URLs per ARCHITECTURE.md §9.
-- Implement Supabase Auth (email/password, confirmation, password reset). Magic link is not in scope for MVP.
+- Implement Supabase Auth (email/password, confirmation, password reset). Magic link is explicitly out of scope.
 - Deploy staging URL to Cloudflare Pages (`*.pages.dev`).
 - **Exit criteria:** Auth sign-up/sign-in works on mobile Safari and Chrome; staging URL is live.
 
@@ -47,7 +47,7 @@
 - Landing page, privacy policy, terms, support, and refund policy pages.
 - Confirm `public/_redirects` (`/* /index.html 200`) and `public/_headers` (CSP) are committed.
 - Production deployment to Cloudflare Pages: create dedicated SiteBrief Pages project, connect SiteBrief GitHub repo, verify `*.pages.dev` build, add custom domain `sitebrief.scope-guard.com` in Pages → Custom domains.
-- **Exit criteria:** All A–K acceptance tests pass; RLS isolation confirmed; `https://sitebrief.scope-guard.com` is live.
+- **Exit criteria:** All acceptance tests pass; RLS isolation confirmed; `https://sitebrief.scope-guard.com` is live.
 
 ### Day 7 — Launch
 - Final full acceptance test pass.
@@ -56,6 +56,13 @@
 - Public launch.
 - Begin advertising experiment.
 - **Exit criteria:** Real payment can complete; app is publicly accessible.
+
+---
+
+## MIGRATION DELIVERY RULES
+- The migration file (`supabase/migrations/001_initial.sql`) is the single source of truth.
+- No ad hoc, unrecorded production SQL is ever to be run directly.
+- The architect and implementation agent do not execute migrations. Only the human owner applies migrations to production.
 
 ---
 
@@ -72,4 +79,10 @@
 | H7 | After first `*.pages.dev` deploy: add webhook endpoint `https://sitebrief.scope-guard.com/functions/v1/stripe-webhook` in Stripe dashboard; copy signing secret to Edge Function secrets | Human | ⬜ Not started |
 | H8 | Set Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID` | Human | ⬜ Not started |
 | H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
-| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add environment variables `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
+| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add env vars `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
+| HA-AUTH-1 | Configure custom SMTP provider in Supabase (Auth → SMTP Settings) | Human | ⬜ Not started |
+| HA-AUTH-2 | Verify sender domain/address with SMTP provider | Human | ⬜ Not started |
+| HA-AUTH-3 | Customize confirmation email template | Human | ⬜ Not started |
+| HA-AUTH-4 | Customize password-reset email template | Human | ⬜ Not started |
+| HA-AUTH-5 | Set Site URL to `https://sitebrief.scope-guard.com` in Supabase Auth settings | Human | ⬜ Not started |
+| HA-AUTH-6 | Configure allowed redirect URLs per ARCHITECTURE.md §9 | Human | ⬜ Not started |
