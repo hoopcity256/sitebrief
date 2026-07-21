@@ -7,8 +7,8 @@ import LoginPage from './pages/LoginPage'
 import SignUpPage from './pages/SignUpPage'
 import PasswordResetPage from './pages/PasswordResetPage'
 import UpdatePasswordPage from './pages/UpdatePasswordPage'
+import { OnboardingPage } from './pages/OnboardingPage'
 import {
-  OnboardingPage,
   ProjectsPage,
   ProjectDetailPage,
   CreateReportPage,
