@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { getReport, updateReport } from '../lib/reports'
+import { saveDraft, loadDraft, clearDraft } from '../lib/draftRecovery'
 
 export const CreateReportPage = () => {
   const { projectId } = useParams<{ projectId: string }>()
@@ -18,6 +19,8 @@ export const CreateReportPage = () => {
   const [saving, setSaving] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [lastSaved, setLastSaved] = useState<string | null>(null)
+  const [recoveryBanner, setRecoveryBanner] = useState(false)
+  const recoveredDraftRef = useRef<{ work_completed: string; problems: string; next_steps: string } | null>(null)
 
   // Revision counter for stale-save protection
   const revisionRef = useRef(0)
@@ -45,6 +48,21 @@ export const CreateReportPage = () => {
       setWorkCompleted(report.work_completed ?? '')
       setProblems(report.problems ?? '')
       setNextSteps(report.next_steps ?? '')
+
+      // Check IndexedDB for a recovered draft
+      try {
+        const draft = await loadDraft(reportId)
+        if (draft && draft.savedAt > new Date(report.updated_at).getTime()) {
+          recoveredDraftRef.current = {
+            work_completed: draft.work_completed,
+            problems: draft.problems,
+            next_steps: draft.next_steps,
+          }
+          setRecoveryBanner(true)
+        }
+      } catch {
+        // IndexedDB unavailable — proceed without recovery
+      }
     } catch {
       setError('Could not load report.')
     } finally {
@@ -58,20 +76,49 @@ export const CreateReportPage = () => {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
 
+  // Save to IndexedDB (shorter debounce)
+  const idbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleIdbSave = useCallback(() => {
+    if (!reportId) return
+    if (idbTimerRef.current) clearTimeout(idbTimerRef.current)
+    idbTimerRef.current = setTimeout(() => {
+      saveDraft(reportId, {
+        work_completed: workCompleted,
+        problems,
+        next_steps: nextSteps,
+        revision: revisionRef.current,
+        savedAt: Date.now(),
+      }).catch(() => { /* IndexedDB save is best-effort */ })
+    }, 500)
+  }, [reportId, workCompleted, problems, nextSteps])
+
   const flushSave = useCallback(async () => {
     if (!reportId || !dirtyRef.current) return
     const capturedRevision = revisionRef.current
     dirtyRef.current = false
     setSaving(true)
+
+    // Immediate IDB save
+    try {
+      await saveDraft(reportId, {
+        work_completed: workCompleted,
+        problems,
+        next_steps: nextSteps,
+        revision: capturedRevision,
+        savedAt: Date.now(),
+      })
+    } catch { /* best-effort */ }
+
     try {
       const result = await updateReport(reportId, {
         work_completed: workCompleted,
         problems,
         next_steps: nextSteps,
       })
-      // Only update lastSaved if revision hasn't advanced
+      // Only update lastSaved and clear IDB if revision hasn't advanced
       if (capturedRevision === revisionRef.current) {
         setLastSaved(new Date(result.updated_at).toLocaleTimeString())
+        clearDraft(reportId).catch(() => {})
       }
     } catch {
       // Silent — autosave failure is non-blocking
@@ -85,7 +132,8 @@ export const CreateReportPage = () => {
     revisionRef.current += 1
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(flushSave, 800)
-  }, [flushSave])
+    scheduleIdbSave()
+  }, [flushSave, scheduleIdbSave])
 
   // Flush on blur and visibility change
   useEffect(() => {
@@ -99,6 +147,7 @@ export const CreateReportPage = () => {
       document.removeEventListener('visibilitychange', handleVisibility)
       window.removeEventListener('pagehide', handlePageHide)
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      if (idbTimerRef.current) clearTimeout(idbTimerRef.current)
     }
   }, [flushSave])
 
@@ -109,6 +158,22 @@ export const CreateReportPage = () => {
     }, 30_000)
     return () => clearInterval(interval)
   }, [flushSave])
+
+  const handleRecoverDraft = () => {
+    if (recoveredDraftRef.current) {
+      setWorkCompleted(recoveredDraftRef.current.work_completed)
+      setProblems(recoveredDraftRef.current.problems)
+      setNextSteps(recoveredDraftRef.current.next_steps)
+      recoveredDraftRef.current = null
+    }
+    setRecoveryBanner(false)
+  }
+
+  const handleDismissRecovery = () => {
+    setRecoveryBanner(false)
+    recoveredDraftRef.current = null
+    if (reportId) clearDraft(reportId).catch(() => {})
+  }
 
   const handleDone = async () => {
     if (!reportId || finishing) return
@@ -121,6 +186,8 @@ export const CreateReportPage = () => {
         next_steps: nextSteps,
         is_draft: false,
       })
+      // Clear IndexedDB draft on successful finalization
+      await clearDraft(reportId).catch(() => {})
       navigate(`/preview/${reportId}`)
     } catch {
       setError('Could not finalize report. Please try again.')
@@ -171,6 +238,16 @@ export const CreateReportPage = () => {
           {saving ? 'Saving…' : lastSaved ? `Saved ${lastSaved}` : ''}
         </div>
       </header>
+
+      {recoveryBanner && (
+        <div style={styles.recoveryBanner}>
+          <span>📝 Unsaved draft recovered.</span>
+          <div style={styles.recoveryActions}>
+            <button onClick={handleRecoverDraft} style={styles.recoveryRestore}>Restore</button>
+            <button onClick={handleDismissRecovery} style={styles.recoveryDismiss}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
       <div style={styles.editorBody}>
         <label style={styles.label}>
@@ -247,4 +324,8 @@ const styles: Record<string, React.CSSProperties> = {
   textarea: { padding: '12px', borderRadius: '8px', border: '1px solid #DEE2E6', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical' as const, outline: 'none', minHeight: '96px' },
   photoPlaceholder: { padding: '20px 16px', border: '2px dashed #DEE2E6', borderRadius: '10px', textAlign: 'center', color: '#ADB5BD', fontSize: '14px' },
   doneBtn: { minHeight: '48px', background: '#198754', color: '#FFF', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px' },
+  recoveryBanner: { margin: '8px 16px 0', padding: '12px 16px', background: '#FFF8E1', border: '1px solid #FFCA28', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '14px', color: '#795548', gap: '8px' },
+  recoveryActions: { display: 'flex', gap: '8px', flexShrink: 0 },
+  recoveryRestore: { padding: '6px 14px', background: '#1A5276', color: '#FFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
+  recoveryDismiss: { padding: '6px 14px', background: 'none', color: '#6C757D', border: '1px solid #DEE2E6', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' },
 }
