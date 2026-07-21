@@ -1,5 +1,5 @@
 -- =============================================================================
--- SiteBrief — Initial Schema Migration (corrective revision)
+-- SiteBrief — Initial Schema Migration (revision 3)
 -- File: supabase/migrations/001_initial.sql
 -- Source of truth: ARCHITECTURE.md §2–§5
 --
@@ -33,6 +33,17 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- required so that child tables can declare composite foreign keys referencing
 -- both the row and its owner — enforcing parent ownership at the database
 -- level without relying solely on RLS.
+--
+-- CANONICAL PATH CHECKS: logo_storage_path, generated_pdf_storage_path, and
+-- report_photos.storage_path are constrained to the exact pattern the Storage
+-- policies enforce.  Callers cannot register invented or non-canonical paths.
+--
+-- PHOTO ID GENERATION: The client MUST generate the photo UUID client-side
+-- (e.g., crypto.randomUUID()) and supply it as the explicit id value when
+-- inserting a report_photos row.  This allows the canonical storage_path to
+-- be computed before INSERT and validated by the CHECK constraint.
+-- Upload flow: generate id → compute path → INSERT metadata row →
+-- upload file to Storage (Storage policy verifies metadata row exists).
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -53,6 +64,7 @@ CREATE TABLE public.profiles (
 -- ---------------------------------------------------------------------------
 -- company_profiles
 -- logo_storage_path stores a stable Storage object key — NEVER a signed URL.
+-- CHECK enforces the exact canonical logo path for this user.
 -- ---------------------------------------------------------------------------
 CREATE TABLE public.company_profiles (
   id                  UUID        NOT NULL DEFAULT gen_random_uuid(),
@@ -66,9 +78,13 @@ CREATE TABLE public.company_profiles (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CONSTRAINT company_profiles_pkey         PRIMARY KEY (id),
-  CONSTRAINT company_profiles_user_id_key  UNIQUE (user_id),
-  CONSTRAINT company_profiles_user_id_fkey FOREIGN KEY (user_id)
+  CONSTRAINT company_profiles_pkey          PRIMARY KEY (id),
+  CONSTRAINT company_profiles_user_id_key   UNIQUE (user_id),
+  CONSTRAINT company_profiles_logo_path_key CHECK (
+    logo_storage_path IS NULL OR
+    logo_storage_path = 'users/' || user_id::text || '/logo.jpg'
+  ),
+  CONSTRAINT company_profiles_user_id_fkey  FOREIGN KEY (user_id)
     REFERENCES auth.users(id) ON DELETE CASCADE
 );
 
@@ -119,12 +135,10 @@ CREATE TABLE public.project_report_counters (
 -- ---------------------------------------------------------------------------
 -- reports
 -- generated_pdf_storage_path stores a stable Storage object key — NEVER a
--- signed URL.  Signed URLs are generated on demand for sharing only.
--- UNIQUE(id, user_id) supports composite FK from report_photos.
--- UNIQUE(project_id, report_number) is the final atomicity guard.
--- report_number > 0 prevents zero or negative numbers from the counter.
--- report_number immutability is enforced by the trigger below.
--- Direct browser INSERT is prohibited via explicit REVOKE and absent policy.
+-- signed URL.  The CHECK constraint enforces the exact canonical PDF path for
+-- this user and report.  The Edge Function computes the canonical path from
+-- known user_id and id before writing it back.
+-- INSERT privilege revoked from browser; use create_report() only.
 -- ---------------------------------------------------------------------------
 CREATE TABLE public.reports (
   id                         UUID        NOT NULL DEFAULT gen_random_uuid(),
@@ -144,6 +158,11 @@ CREATE TABLE public.reports (
   CONSTRAINT reports_id_user_id_key     UNIQUE (id, user_id),
   CONSTRAINT reports_project_number_key UNIQUE (project_id, report_number),
   CONSTRAINT reports_report_number_pos  CHECK (report_number > 0),
+  CONSTRAINT reports_pdf_path_check     CHECK (
+    generated_pdf_storage_path IS NULL OR
+    generated_pdf_storage_path =
+      'users/' || user_id::text || '/reports/' || id::text || '/report.pdf'
+  ),
   CONSTRAINT reports_user_id_fkey       FOREIGN KEY (user_id)
     REFERENCES auth.users(id) ON DELETE CASCADE,
   CONSTRAINT reports_project_user_fkey
@@ -156,11 +175,21 @@ CREATE INDEX reports_project_id_created_at_idx
 
 -- ---------------------------------------------------------------------------
 -- report_photos
--- storage_path is a relative Storage object key.  UNIQUE on storage_path
--- prevents the same file being registered twice.
--- UNIQUE(report_id, display_order) combined with CHECK (display_order BETWEEN
--- 0 AND 9) enforces a hard maximum of 10 photos per report.
--- Composite FK enforces that (report_id, user_id) exists in reports.
+-- storage_path is fully determined by user_id, report_id, and id.
+-- The CHECK constraint enforces the exact canonical path; callers cannot
+-- register invented or non-canonical paths.
+--
+-- DEFERRABLE INITIALLY DEFERRED on UNIQUE(report_id, display_order) allows
+-- photo reordering to swap two positions within a single transaction without
+-- an intermediate uniqueness violation.  Day 3 must implement reordering
+-- atomically through a database function or a client-initiated deferred
+-- transaction; do not rely on two separate UPDATE calls outside a transaction.
+--
+-- Operation order:
+--   Write:  INSERT metadata row → upload file to Storage bucket
+--   Delete: delete file from Storage bucket → DELETE metadata row
+-- Storage policies for photos enforce this order by requiring a matching
+-- metadata row for SELECT, INSERT, UPDATE, and DELETE on Storage objects.
 -- ---------------------------------------------------------------------------
 CREATE TABLE public.report_photos (
   id            UUID        NOT NULL DEFAULT gen_random_uuid(),
@@ -173,10 +202,15 @@ CREATE TABLE public.report_photos (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   CONSTRAINT report_photos_pkey               PRIMARY KEY (id),
-  CONSTRAINT report_photos_order_key          UNIQUE (report_id, display_order),
+  CONSTRAINT report_photos_order_key
+    UNIQUE (report_id, display_order) DEFERRABLE INITIALLY DEFERRED,
   CONSTRAINT report_photos_storage_path_key   UNIQUE (storage_path),
   CONSTRAINT report_photos_display_order_check
     CHECK (display_order BETWEEN 0 AND 9),
+  CONSTRAINT report_photos_path_check CHECK (
+    storage_path =
+      'users/' || user_id::text || '/reports/' || report_id::text || '/' || id::text || '.jpg'
+  ),
   CONSTRAINT report_photos_user_id_fkey       FOREIGN KEY (user_id)
     REFERENCES auth.users(id) ON DELETE CASCADE,
   CONSTRAINT report_photos_report_user_fkey
@@ -189,10 +223,12 @@ CREATE INDEX report_photos_report_id_order_idx
 
 -- ---------------------------------------------------------------------------
 -- subscriptions
--- Written exclusively by Edge Functions via the service-role client.
--- stripe_event_created_at guards against out-of-order webhook delivery.
--- The status CHECK permits every Stripe subscription status.
--- Only 'trialing' and 'active' grant application access (see has_active_access).
+-- current_period_end is nullable.  Some Stripe statuses (e.g., incomplete,
+-- paused, canceled) carry no meaningful period end; forcing NOT NULL would
+-- require inventing a date.
+-- has_active_access() explicitly guards IS NOT NULL before comparing dates.
+-- Only 'trialing' (with non-null trial_end in future) and 'active' (with
+-- non-null current_period_end in future) grant application access.
 -- ---------------------------------------------------------------------------
 CREATE TABLE public.subscriptions (
   id                      UUID        NOT NULL DEFAULT gen_random_uuid(),
@@ -201,7 +237,7 @@ CREATE TABLE public.subscriptions (
   stripe_subscription_id  TEXT,
   status                  TEXT        NOT NULL,
   trial_end               TIMESTAMPTZ,
-  current_period_end      TIMESTAMPTZ NOT NULL,
+  current_period_end      TIMESTAMPTZ,
   cancel_at_period_end    BOOLEAN     NOT NULL DEFAULT false,
   stripe_event_created_at TIMESTAMPTZ,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -225,8 +261,8 @@ CREATE TABLE public.subscriptions (
 -- stripe_webhook_events
 -- Idempotency log for incoming webhook deliveries.
 -- processed_at has NO DEFAULT — it is set only on successful processing.
--- A row where processed_at IS NULL is eligible for retry regardless of whether
--- processing_error IS NOT NULL.
+-- A row where processed_at IS NULL is eligible for retry regardless of
+-- whether processing_error IS NOT NULL.
 -- A duplicate event may be skipped ONLY when processed_at IS NOT NULL.
 -- No browser access.
 -- ---------------------------------------------------------------------------
@@ -245,7 +281,6 @@ CREATE TABLE public.stripe_webhook_events (
 
 -- =============================================================================
 -- ENABLE ROW LEVEL SECURITY
--- Must be enabled before any policies are declared.
 -- =============================================================================
 
 ALTER TABLE public.profiles              ENABLE ROW LEVEL SECURITY;
@@ -260,9 +295,6 @@ ALTER TABLE public.stripe_webhook_events ENABLE ROW LEVEL SECURITY;
 
 -- =============================================================================
 -- EXPLICIT TABLE PRIVILEGES
--- Revoke all from anon and authenticated first, then grant exactly the minimum
--- required for browser operation.  RLS must also permit an operation; both
--- privilege and policy must pass.
 -- =============================================================================
 
 REVOKE ALL ON public.profiles                FROM anon, authenticated;
@@ -274,34 +306,38 @@ REVOKE ALL ON public.report_photos           FROM anon, authenticated;
 REVOKE ALL ON public.subscriptions           FROM anon, authenticated;
 REVOKE ALL ON public.stripe_webhook_events   FROM anon, authenticated;
 
--- Browser privileges (authenticated role only)
-GRANT SELECT, INSERT, UPDATE             ON public.profiles           TO authenticated;
-GRANT SELECT, INSERT, UPDATE             ON public.company_profiles   TO authenticated;
-GRANT SELECT, INSERT, UPDATE             ON public.projects           TO authenticated;
+-- Browser privileges (authenticated only)
+GRANT SELECT, INSERT, UPDATE         ON public.profiles         TO authenticated;
+GRANT SELECT, INSERT, UPDATE         ON public.company_profiles TO authenticated;
+GRANT SELECT, INSERT, UPDATE         ON public.projects         TO authenticated;
 -- project_report_counters: no browser access
-GRANT SELECT, UPDATE                     ON public.reports            TO authenticated;
+GRANT SELECT, UPDATE                 ON public.reports          TO authenticated;
 -- No direct INSERT or DELETE on reports for authenticated
-GRANT SELECT, INSERT, UPDATE, DELETE     ON public.report_photos      TO authenticated;
-GRANT SELECT                             ON public.subscriptions      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.report_photos    TO authenticated;
+GRANT SELECT                         ON public.subscriptions    TO authenticated;
 -- stripe_webhook_events: no browser access
 
--- Server-side privileges (service_role bypasses RLS but needs table-level grants)
-GRANT SELECT, INSERT, UPDATE             ON public.subscriptions         TO service_role;
-GRANT SELECT, INSERT, UPDATE             ON public.stripe_webhook_events  TO service_role;
+-- Server-side privileges (service_role bypasses RLS but still needs table grants)
+GRANT SELECT, INSERT, UPDATE ON public.subscriptions         TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.stripe_webhook_events TO service_role;
 
 
 -- =============================================================================
 -- has_active_access()
--- Defined here — after the subscriptions table exists and after explicit
--- privileges are set, but BEFORE any RLS policy references it.
+-- Defined here — after the subscriptions table and after explicit privileges
+-- are set, but BEFORE any RLS policy references it.
 --
--- Returns true when the caller has a valid trialing or active subscription.
--- cancel_at_period_end = true with status = 'active' remains entitled until
--- current_period_end passes.  paused, past_due, unpaid, canceled, and
--- incomplete statuses return false.
--- No live Stripe API call is made.
--- SECURITY INVOKER: runs as the authenticated user; auth.uid() is safe.
--- SET search_path = '' forces all references to be schema-qualified.
+-- IS NOT NULL guards on trial_end and current_period_end are required because
+-- current_period_end is now nullable.  A null date must not evaluate as
+-- future; it must return false.
+--
+-- Access rules:
+--   'trialing' AND trial_end IS NOT NULL AND trial_end > now()        → true
+--   'active'   AND current_period_end IS NOT NULL
+--                AND current_period_end > now()                       → true
+--   cancel_at_period_end = true with status='active' remains entitled
+--   until current_period_end passes.
+--   All other statuses (paused, past_due, unpaid, canceled, …)        → false
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.has_active_access()
@@ -316,9 +352,13 @@ AS $$
     FROM public.subscriptions AS s
     WHERE s.user_id = auth.uid()
       AND (
-        (s.status = 'trialing' AND s.trial_end        > now())
+        (s.status = 'trialing'
+          AND s.trial_end IS NOT NULL
+          AND s.trial_end > now())
         OR
-        (s.status = 'active'   AND s.current_period_end > now())
+        (s.status = 'active'
+          AND s.current_period_end IS NOT NULL
+          AND s.current_period_end > now())
       )
   )
 $$;
@@ -336,7 +376,7 @@ GRANT  EXECUTE ON FUNCTION public.has_active_access() TO authenticated;
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- profiles (RLS check: auth.uid() = id, not user_id)
+-- profiles (auth.uid() = id — no user_id column)
 -- ---------------------------------------------------------------------------
 CREATE POLICY "profiles_select_own"
   ON public.profiles FOR SELECT TO authenticated
@@ -350,8 +390,6 @@ CREATE POLICY "profiles_update_own"
   ON public.profiles FOR UPDATE TO authenticated
   USING     (auth.uid() = id)
   WITH CHECK (auth.uid() = id);
-
--- DELETE handled by CASCADE from auth.users; no direct browser delete.
 
 -- ---------------------------------------------------------------------------
 -- company_profiles
@@ -385,32 +423,25 @@ CREATE POLICY "projects_update_own"
   USING     (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- DELETE not permitted in MVP (archive via is_archived = true).
-
 -- ---------------------------------------------------------------------------
--- project_report_counters — no browser policies.
--- Access revoked above; table is only reachable through create_report().
+-- project_report_counters — no browser policies; no browser access.
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
 -- reports
--- SELECT is always permitted to the owner regardless of subscription state.
+-- SELECT always permitted to owner regardless of subscription state.
 -- Expired users retain read access to their own reports.
--- INSERT privilege was revoked above; no permissive INSERT policy exists.
--- UPDATE requires active access; report identity fields protected by trigger.
+-- INSERT privilege revoked; no permissive INSERT policy; use create_report().
+-- UPDATE requires active access; identity columns protected by trigger.
 -- ---------------------------------------------------------------------------
 CREATE POLICY "reports_select_own"
   ON public.reports FOR SELECT TO authenticated
   USING (auth.uid() = user_id);
 
--- No INSERT policy: INSERT revoked at privilege level; must use create_report().
-
 CREATE POLICY "reports_update_own_active"
   ON public.reports FOR UPDATE TO authenticated
   USING     (auth.uid() = user_id AND public.has_active_access())
   WITH CHECK (auth.uid() = user_id AND public.has_active_access());
-
--- DELETE not permitted in MVP.
 
 -- ---------------------------------------------------------------------------
 -- report_photos
@@ -435,28 +466,24 @@ CREATE POLICY "report_photos_delete_own_active"
   USING (auth.uid() = user_id AND public.has_active_access());
 
 -- ---------------------------------------------------------------------------
--- subscriptions — SELECT only for browser; no INSERT/UPDATE/DELETE policies.
--- Edge Functions use the service-role key which bypasses RLS entirely.
+-- subscriptions — SELECT only for browser.
+-- Edge Functions use service-role which bypasses RLS.
 -- ---------------------------------------------------------------------------
 CREATE POLICY "subscriptions_select_own"
   ON public.subscriptions FOR SELECT TO authenticated
   USING (auth.uid() = user_id);
 
 -- ---------------------------------------------------------------------------
--- stripe_webhook_events — no browser policies at all.
+-- stripe_webhook_events — no browser policies.
 -- ---------------------------------------------------------------------------
 
 
 -- =============================================================================
 -- create_report(p_project_id UUID)
--- Defined after RLS policies so it can reference them conceptually; the
--- function itself bypasses RLS via SECURITY DEFINER and service-level inserts.
---
--- SECURITY DEFINER: required so the function can INSERT into public.reports
--- and UPSERT into public.project_report_counters despite those tables having
--- INSERT revoked from authenticated.
--- SET search_path = '': forces all references to be schema-qualified.
--- auth.uid() is the sole source of identity — no caller-supplied user ID.
+-- SECURITY DEFINER: inserts into reports and project_report_counters despite
+-- those tables having INSERT revoked from authenticated.
+-- SET search_path = '': all references are schema-qualified.
+-- auth.uid() is the sole source of identity.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.create_report(p_project_id UUID)
@@ -492,8 +519,6 @@ BEGIN
   END IF;
 
   -- 4. Atomically allocate the next report number for this project.
-  --    First call inserts last_report_number = 1.
-  --    Subsequent calls increment the existing counter in one atomic step.
   INSERT INTO public.project_report_counters (project_id, user_id, last_report_number)
   VALUES (p_project_id, v_user_id, 1)
   ON CONFLICT (project_id) DO UPDATE
@@ -529,11 +554,9 @@ GRANT  EXECUTE ON FUNCTION public.create_report(UUID) TO authenticated;
 
 -- =============================================================================
 -- IMMUTABLE REPORT IDENTITY TRIGGER
--- Prevents UPDATE from changing any of the four identity columns on reports:
---   id, user_id, project_id, report_number
+-- Prevents UPDATE from changing id, user_id, project_id, or report_number.
 -- Report content fields (is_draft, work_completed, problems, next_steps,
--- generated_pdf_storage_path, generated_at, updated_at) remain editable for
--- entitled owners per the reports_update_own_active RLS policy.
+-- generated_pdf_storage_path, generated_at, updated_at) remain editable.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.prevent_report_identity_change()
@@ -563,8 +586,6 @@ BEGIN
 END;
 $$;
 
--- Trigger functions are invoked by the trigger mechanism, not via EXECUTE
--- privilege checks.  Revoking PUBLIC prevents direct function calls.
 REVOKE ALL ON FUNCTION public.prevent_report_identity_change() FROM PUBLIC;
 
 CREATE TRIGGER trg_reports_immutable_identity
@@ -574,31 +595,77 @@ CREATE TRIGGER trg_reports_immutable_identity
 
 
 -- =============================================================================
--- STORAGE BUCKETS
--- Three private buckets with explicit size limits and MIME type allowlists.
--- ON CONFLICT DO UPDATE enforces correct security settings even if a bucket
--- with that ID already exists (e.g., from a previous partial run or manual
--- creation).  ON CONFLICT DO NOTHING is not used for security-relevant config.
---
--- Path model:
---   company-logos:  users/{userId}/logo.jpg
---   report-photos:  users/{userId}/reports/{reportId}/{photoId}.jpg
---   report-pdfs:    users/{userId}/reports/{reportId}/report.pdf
+-- IMMUTABLE PHOTO IDENTITY TRIGGER
+-- Prevents UPDATE from changing id, user_id, report_id, or storage_path.
+-- Only caption, display_order, and updated_at may be changed.
+-- Protecting storage_path is critical because the Storage policy correlates
+-- the file object to the metadata row via storage_path = name; changing
+-- storage_path would silently orphan the underlying Storage object.
 -- =============================================================================
 
--- A. company-logos — max 2 MB, images only
+CREATE OR REPLACE FUNCTION public.prevent_report_photo_identity_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.id IS DISTINCT FROM OLD.id THEN
+    RAISE EXCEPTION
+      'prevent_report_photo_identity_change: id is immutable (photo: %)', OLD.id;
+  END IF;
+  IF NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+    RAISE EXCEPTION
+      'prevent_report_photo_identity_change: user_id is immutable (photo: %)', OLD.id;
+  END IF;
+  IF NEW.report_id IS DISTINCT FROM OLD.report_id THEN
+    RAISE EXCEPTION
+      'prevent_report_photo_identity_change: report_id is immutable (photo: %)', OLD.id;
+  END IF;
+  IF NEW.storage_path IS DISTINCT FROM OLD.storage_path THEN
+    RAISE EXCEPTION
+      'prevent_report_photo_identity_change: storage_path is immutable (photo: %)', OLD.id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.prevent_report_photo_identity_change() FROM PUBLIC;
+
+CREATE TRIGGER trg_report_photos_immutable_identity
+  BEFORE UPDATE ON public.report_photos
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_report_photo_identity_change();
+
+
+-- =============================================================================
+-- STORAGE BUCKETS
+-- Three private buckets with explicit size limits and MIME type allowlists.
+-- company-logos is JPEG-only for MVP; the browser converts the selected image
+-- to JPEG before upload.
+-- ON CONFLICT DO UPDATE forces correct security settings even if a bucket
+-- with that ID already exists (prevents silently leaving a public or
+-- unrestricted bucket from a prior partial run or manual creation).
+--
+-- Path model:
+--   company-logos:  users/{userId}/logo.jpg       (fixed filename)
+--   report-photos:  users/{userId}/reports/{reportId}/{photoId}.jpg
+--   report-pdfs:    users/{userId}/reports/{reportId}/report.pdf  (fixed filename)
+-- =============================================================================
+
+-- A. company-logos — max 2 MB, JPEG only (browser converts before upload)
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'company-logos',
   'company-logos',
   false,
   2097152,   -- 2 MB = 2 * 1024 * 1024
-  ARRAY['image/jpeg', 'image/png', 'image/webp']
+  ARRAY['image/jpeg']
 )
 ON CONFLICT (id) DO UPDATE SET
   public             = false,
   file_size_limit    = 2097152,
-  allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
+  allowed_mime_types = ARRAY['image/jpeg'];
 
 -- B. report-photos — max 400 KB, JPEG only
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -632,17 +699,17 @@ ON CONFLICT (id) DO UPDATE SET
 -- =============================================================================
 -- STORAGE RLS POLICIES (on storage.objects)
 -- All policies are TO authenticated.
--- logo_storage_path and generated_pdf_storage_path in Postgres store the
--- stable object key — NEVER a signed URL.  Signed URLs are generated on
--- demand for sharing and are never persisted.
+-- Signed URLs are generated on demand and are never persisted.
+-- logo_storage_path, generated_pdf_storage_path, and report_photos.storage_path
+-- store the stable object key only.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
 -- A. company-logos
--- Fixed filename: logo.jpg
--- Path: users/{userId}/logo.jpg
--- foldername returns {users, userId}; filename returns 'logo.jpg'.
--- SELECT, INSERT, UPDATE, DELETE permitted to the logo owner.
+-- Path: users/{userId}/logo.jpg  (fixed filename enforced by policy)
+-- The CHECK constraint on company_profiles already enforces the canonical
+-- path at the metadata level; these policies enforce it at the Storage level.
+-- SELECT, INSERT, UPDATE, DELETE all require the exact canonical filename.
 -- ---------------------------------------------------------------------------
 CREATE POLICY "storage_logos_select_own"
   ON storage.objects FOR SELECT TO authenticated
@@ -689,35 +756,47 @@ CREATE POLICY "storage_logos_delete_own"
 -- ---------------------------------------------------------------------------
 -- B. report-photos
 -- Path: users/{userId}/reports/{reportId}/{photoId}.jpg
--- foldername returns {users, userId, reports, reportId}.
--- Pre-registration pattern: a report_photos metadata row with storage_path
--- equal to the object name must exist BEFORE the file upload succeeds.
--- This prevents uploads of files with no corresponding metadata.
--- SELECT always permitted to owner (expired users retain read access).
+--
+-- ALL operations (SELECT, INSERT, UPDATE, DELETE) require a matching
+-- report_photos metadata row where rp.storage_path = name AND
+-- rp.user_id = auth.uid().  This enforces:
+--
+--   • An orphaned Storage object (no metadata row) is inaccessible to any
+--     authenticated user, including the owner.
+--   • An invented path that was never pre-registered as a metadata row is
+--     inaccessible.
+--   • File must be deleted from Storage BEFORE the metadata row is deleted.
+--     (If the metadata row is deleted first, the Storage object becomes
+--     immediately inaccessible and cannot be cleaned up via the JS client.)
+--
+-- SELECT does not require active access (expired owners retain read access).
 -- INSERT, UPDATE, DELETE require active access.
+--
+-- UPDATE includes the metadata check in both USING and WITH CHECK so that
+-- a row cannot be repointed from a deleted-metadata path to a live one.
 -- ---------------------------------------------------------------------------
 CREATE POLICY "storage_photos_select_own"
   ON storage.objects FOR SELECT TO authenticated
   USING (
     bucket_id = 'report-photos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
+    AND EXISTS (
+      SELECT 1
+      FROM public.report_photos AS rp
+      WHERE rp.user_id      = auth.uid()
+        AND rp.storage_path = name
+    )
   );
 
 CREATE POLICY "storage_photos_insert_own_active"
   ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'report-photos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
     AND public.has_active_access()
     AND EXISTS (
       SELECT 1
       FROM public.report_photos AS rp
-      WHERE rp.storage_path = name
-        AND rp.user_id       = auth.uid()
+      WHERE rp.user_id      = auth.uid()
+        AND rp.storage_path = name
     )
   );
 
@@ -725,53 +804,63 @@ CREATE POLICY "storage_photos_update_own_active"
   ON storage.objects FOR UPDATE TO authenticated
   USING (
     bucket_id = 'report-photos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
     AND public.has_active_access()
+    AND EXISTS (
+      SELECT 1
+      FROM public.report_photos AS rp
+      WHERE rp.user_id      = auth.uid()
+        AND rp.storage_path = name
+    )
   )
   WITH CHECK (
     bucket_id = 'report-photos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
     AND public.has_active_access()
+    AND EXISTS (
+      SELECT 1
+      FROM public.report_photos AS rp
+      WHERE rp.user_id      = auth.uid()
+        AND rp.storage_path = name
+    )
   );
 
 CREATE POLICY "storage_photos_delete_own_active"
   ON storage.objects FOR DELETE TO authenticated
   USING (
     bucket_id = 'report-photos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
     AND public.has_active_access()
+    AND EXISTS (
+      SELECT 1
+      FROM public.report_photos AS rp
+      WHERE rp.user_id      = auth.uid()
+        AND rp.storage_path = name
+    )
   );
 
 -- ---------------------------------------------------------------------------
 -- C. report-pdfs
--- Path: users/{userId}/reports/{reportId}/report.pdf
--- foldername returns {users, userId, reports, reportId}.
--- filename must be exactly 'report.pdf'.
--- The reportId at path position [4] must exist in public.reports for auth.uid().
--- This prevents uploading a PDF to an invented or unowned report directory.
--- SELECT always permitted to owner (expired users retain read access).
+-- Path: users/{userId}/reports/{reportId}/report.pdf  (fixed filename)
+--
+-- The EXISTS subquery constructs the canonical path from owned report IDs
+-- and compares it to the object name as TEXT.  This avoids an unsafe UUID
+-- cast ((storage.foldername(name))[4]::uuid) that would raise an error on
+-- any malformed or non-UUID path segment.  Malformed paths produce no match
+-- in the subquery and evaluate to false — the access is denied cleanly.
+--
+-- SELECT does not require active access (expired owners retain read access).
 -- INSERT and UPDATE require active access.
--- UPDATE is included so that PDF regeneration (upsert) works for entitled owners.
+-- UPDATE is included to support PDF regeneration (upsert pattern).
 -- ---------------------------------------------------------------------------
 CREATE POLICY "storage_pdfs_select_own"
   ON storage.objects FOR SELECT TO authenticated
   USING (
     bucket_id = 'report-pdfs'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
-    AND storage.filename(name) = 'report.pdf'
     AND EXISTS (
       SELECT 1
       FROM public.reports AS r
-      WHERE r.id      = (storage.foldername(name))[4]::uuid
-        AND r.user_id = auth.uid()
+      WHERE r.user_id = auth.uid()
+        AND name = 'users/' || auth.uid()::text
+                  || '/reports/' || r.id::text
+                  || '/report.pdf'
     )
   );
 
@@ -779,16 +868,14 @@ CREATE POLICY "storage_pdfs_insert_own_active"
   ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'report-pdfs'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
-    AND storage.filename(name) = 'report.pdf'
     AND public.has_active_access()
     AND EXISTS (
       SELECT 1
       FROM public.reports AS r
-      WHERE r.id      = (storage.foldername(name))[4]::uuid
-        AND r.user_id = auth.uid()
+      WHERE r.user_id = auth.uid()
+        AND name = 'users/' || auth.uid()::text
+                  || '/reports/' || r.id::text
+                  || '/report.pdf'
     )
   );
 
@@ -796,30 +883,26 @@ CREATE POLICY "storage_pdfs_update_own_active"
   ON storage.objects FOR UPDATE TO authenticated
   USING (
     bucket_id = 'report-pdfs'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
-    AND storage.filename(name) = 'report.pdf'
     AND public.has_active_access()
     AND EXISTS (
       SELECT 1
       FROM public.reports AS r
-      WHERE r.id      = (storage.foldername(name))[4]::uuid
-        AND r.user_id = auth.uid()
+      WHERE r.user_id = auth.uid()
+        AND name = 'users/' || auth.uid()::text
+                  || '/reports/' || r.id::text
+                  || '/report.pdf'
     )
   )
   WITH CHECK (
     bucket_id = 'report-pdfs'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND (storage.foldername(name))[3] = 'reports'
-    AND storage.filename(name) = 'report.pdf'
     AND public.has_active_access()
     AND EXISTS (
       SELECT 1
       FROM public.reports AS r
-      WHERE r.id      = (storage.foldername(name))[4]::uuid
-        AND r.user_id = auth.uid()
+      WHERE r.user_id = auth.uid()
+        AND name = 'users/' || auth.uid()::text
+                  || '/reports/' || r.id::text
+                  || '/report.pdf'
     )
   );
 

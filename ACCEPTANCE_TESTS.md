@@ -13,8 +13,9 @@ All items in this document must pass before public launch. Mark each item `[x]` 
 - [ ] T-SEC-6: Concurrent report creation for the same project returns unique, sequential report numbers.
 - [ ] T-SEC-7: A direct UPDATE to `report_number` on an existing report is rejected by the database trigger.
 - [ ] T-SEC-8: Direct browser INSERT on `reports` table is rejected (must go through `create_report()`).
-- [ ] T-SEC-9: A direct UPDATE to `id`, `user_id`, or `project_id` on an existing report is rejected by the database trigger (`prevent_report_identity_change`).
+- [ ] T-SEC-9: A direct UPDATE to `id`, `user_id`, or `project_id` on an existing report is rejected by the `prevent_report_identity_change` trigger.
 - [ ] T-SEC-10: An eleventh photo row for a single report is rejected with a constraint violation (`display_order BETWEEN 0 AND 9` plus `UNIQUE(report_id, display_order)` enforces the 10-photo maximum).
+- [ ] T-SEC-11: A direct UPDATE to `id`, `user_id`, `report_id`, or `storage_path` on an existing `report_photos` row is rejected by the `prevent_report_photo_identity_change` trigger.
 
 ## 2. STRIPE & BILLING
 - [ ] T-STRIPE-1: Duplicate Stripe events process exactly once (second delivery returns 200 without reprocessing).
@@ -25,6 +26,7 @@ All items in this document must pass before public launch. Mark each item `[x]` 
 - [ ] T-STRIPE-6: A billing outage (failed subscriptions query) does not mislabel an entitled user as expired or erase stored subscription state.
 - [ ] T-STRIPE-7: All eight Stripe subscription statuses (`incomplete`, `incomplete_expired`, `trialing`, `active`, `past_due`, `canceled`, `unpaid`, `paused`) are accepted by the `subscriptions.status` CHECK constraint without error.
 - [ ] T-STRIPE-8: A failed webhook event (`processing_error IS NOT NULL`, `processed_at IS NULL`) is eligible for retry on the next delivery attempt and does not remain permanently stuck.
+- [ ] T-STRIPE-9: A subscription row with `current_period_end = NULL` and `status = 'paused'` can be stored without error and is not entitled (`has_active_access()` returns false).
 
 ## 3. STORAGE
 - [ ] T-STOR-1: Storage write policies enforce ownership (user cannot write to another user's path).
@@ -32,35 +34,45 @@ All items in this document must pass before public launch. Mark each item `[x]` 
 - [ ] T-STOR-3: Existing Storage files remain readable after subscription expiration.
 - [ ] T-STOR-4: A logo file larger than 2 MB is rejected by the `company-logos` bucket size limit.
 - [ ] T-STOR-5: A photo file larger than 400 KB is rejected by the `report-photos` bucket size limit.
-- [ ] T-STOR-6: A non-JPEG file (e.g., PNG, HEIC) is rejected when uploading to the `report-photos` bucket (allowed MIME type: `image/jpeg` only).
-- [ ] T-STOR-7: A non-PDF file is rejected when uploading to the `report-pdfs` bucket (allowed MIME type: `application/pdf` only).
-- [ ] T-STOR-8: Uploading to an invented or unowned report path (e.g., `users/{userId}/reports/{nonExistentReportId}/report.pdf`) is rejected by the PDF policy's report-ownership check.
-- [ ] T-STOR-9: Uploading a photo to `report-photos` without a pre-existing `report_photos` metadata row whose `storage_path` equals the object name is rejected (pre-registration pattern).
-- [ ] T-STOR-10: PDF regeneration for an entitled owner succeeds via the UPDATE policy (upsert pattern — overwriting an existing `report.pdf` for the same report).
+- [ ] T-STOR-6: A PNG or WebP file is rejected when uploading to the `company-logos` bucket (JPEG-only; the browser must convert before upload).
+- [ ] T-STOR-7: A non-JPEG file (e.g., PNG, HEIC) is rejected when uploading to the `report-photos` bucket (allowed MIME type: `image/jpeg` only).
+- [ ] T-STOR-8: A non-PDF file is rejected when uploading to the `report-pdfs` bucket (allowed MIME type: `application/pdf` only).
+- [ ] T-STOR-9: Uploading to an invented or unowned report path (e.g., `users/{userId}/reports/{nonExistentReportId}/report.pdf`) is rejected by the PDF policy's report-ownership check without throwing a UUID-cast error.
+- [ ] T-STOR-10: A deliberately malformed PDF path (e.g., path containing `not-a-uuid`) returns access denied rather than a PostgreSQL UUID-cast exception.
+- [ ] T-STOR-11: Uploading a photo to `report-photos` without a pre-existing `report_photos` metadata row whose `storage_path` equals the object name is rejected (pre-registration pattern).
+- [ ] T-STOR-12: A `report-photos` Storage object whose metadata row has been deleted is inaccessible — even the owner cannot SELECT or DELETE it through the Supabase JS client.
+- [ ] T-STOR-13: PDF regeneration for an entitled owner succeeds via the UPDATE policy (upsert pattern — overwriting an existing `report.pdf` for the same report).
 
-## 4. AUTH & EMAIL
+## 4. CANONICAL PATH CONSTRAINTS
+- [ ] T-PATH-1: A `company_profiles` UPDATE setting `logo_storage_path` to a non-canonical value (e.g., `logos/logo.jpg` or a signed URL) is rejected by the CHECK constraint.
+- [ ] T-PATH-2: A `report_photos` INSERT with a non-canonical `storage_path` (e.g., a path that does not match `users/{userId}/reports/{reportId}/{photoId}.jpg`) is rejected by the CHECK constraint.
+- [ ] T-PATH-3: A `reports` UPDATE setting `generated_pdf_storage_path` to a non-canonical value is rejected by the CHECK constraint.
+- [ ] T-PATH-4: Two `report_photos` rows with swapped `display_order` values can be reordered atomically within a single database transaction without a uniqueness violation (DEFERRABLE INITIALLY DEFERRED).
+
+## 5. AUTH & EMAIL
 - [ ] T-AUTH-1: Confirmation email is delivered through custom SMTP (not Supabase demo provider) before launch.
 - [ ] T-AUTH-2: Password-reset email is delivered through custom SMTP.
 - [ ] T-AUTH-3: Magic link sign-in is not exposed in the UI or available through the Supabase client.
 
-## 5. MIGRATION & DATABASE INTEGRITY
+## 6. MIGRATION & DATABASE INTEGRITY
 - [ ] T-MIG-1: The migration file executes as a single transaction — a deliberate syntax error in any statement causes complete rollback with no partial schema applied.
 - [ ] T-MIG-2: `report_number` is positive — a report row with `report_number = 0` or a negative value is rejected by the `CHECK (report_number > 0)` constraint.
 - [ ] T-MIG-3: `last_report_number` is non-negative — a counter row with a negative value is rejected by the `CHECK (last_report_number >= 0)` constraint.
 - [ ] T-MIG-4: `report_photos.storage_path` is globally unique — inserting a second metadata row with a duplicate path is rejected.
 
-## 6. CORE UI & PIPELINES
+## 7. CORE UI & PIPELINES
 - [ ] C1: Projects can be created, listed, and archived.
 - [ ] C2: Report editor functions correctly (text fields, photos, captions).
 - [ ] C3: IndexedDB draft recovery restores unsaved progress upon accidental reload.
 - [ ] D1: `<input type="file" capture="environment">` invokes camera on mobile.
 - [ ] D2: Client-side compression respects 1200px long-edge target and iteratively targets <= 200 KB.
 - [ ] D3: Photo is rejected with readable error if it cannot be compressed under 400 KB. Limit 10 photos.
+- [ ] D4: Selected logo image is converted to JPEG client-side before upload (browser handles PNG/WebP/HEIC input).
 - [ ] E1: PDF generates with `@react-pdf/renderer` as a Blob without base64 retention.
 - [ ] F1: Web Share API works if supported, otherwise provides a standard download.
 - [ ] J1: Layout remains usable at 360px viewport width (cross-browser tested).
 
-## 7. ARCHITECTURE SAFETY ADDENDUM VALIDATIONS
+## 8. ARCHITECTURE SAFETY ADDENDUM VALIDATIONS
 - [ ] L1: Service worker does not cache Supabase API calls, Stripe redirects, or storage URLs.
 - [ ] L2: An unauthenticated deep-link to `/projects/:id` redirects to `/login` and returns to original URL after sign-in.
 - [ ] L3: Direct browser navigation to `/projects/:id` (without navigating from home) loads the correct screen.

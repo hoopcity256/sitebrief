@@ -34,8 +34,10 @@ The following exact objects are specified for the initial migration (`supabase/m
 ### 2. company_profiles
 - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
 - `user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
-- `company_name TEXT NOT NULL`, `phone TEXT`, `email TEXT`, `brand_color TEXT`
-- `logo_storage_path TEXT` — stable Supabase Storage path, NEVER a signed or expiring URL
+- `company_name TEXT NOT NULL`
+- `phone`, `email`, `brand_color TEXT`
+- `logo_storage_path TEXT` — stable Storage path, NEVER a signed URL
+- `CHECK (logo_storage_path IS NULL OR logo_storage_path = 'users/' || user_id::text || '/logo.jpg')` — canonical logo path enforced at db level
 - `onboarding_complete BOOLEAN NOT NULL DEFAULT false`
 - `created_at`, `updated_at` timestamps
 
@@ -62,37 +64,43 @@ The following exact objects are specified for the initial migration (`supabase/m
 - `report_number INTEGER NOT NULL CHECK (report_number > 0)`
 - `is_draft BOOLEAN NOT NULL DEFAULT true`
 - `work_completed TEXT`, `problems TEXT`, `next_steps TEXT`
-- `generated_pdf_storage_path TEXT` — stable Supabase Storage path, NEVER a signed or expiring URL
+- `generated_pdf_storage_path TEXT` — stable Storage path, NEVER a signed URL
+- `CHECK (generated_pdf_storage_path IS NULL OR generated_pdf_storage_path = 'users/' || user_id::text || '/reports/' || id::text || '/report.pdf')` — canonical PDF path enforced at db level
 - `generated_at TIMESTAMPTZ`
 - `created_at`, `updated_at` timestamps
 - `UNIQUE(id, user_id)`
 - `UNIQUE(project_id, report_number)` — final atomicity guard
 - `FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id)`
-- `report_number` is immutable after creation (enforced by trigger)
+- `id`, `user_id`, `project_id`, `report_number` are immutable after creation (enforced by `prevent_report_identity_change` trigger)
 
 ### 6. report_photos
-- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `id UUID PRIMARY KEY` — client generates UUID before INSERT (required for canonical path)
 - `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
 - `report_id UUID NOT NULL`
-- `storage_path TEXT NOT NULL` — relative Supabase Storage path
-- `display_order INTEGER NOT NULL`
+- `storage_path TEXT NOT NULL UNIQUE` — stable Storage path, NEVER a signed URL
+- `CHECK (storage_path = 'users/' || user_id::text || '/reports/' || report_id::text || '/' || id::text || '.jpg')` — canonical photo path enforced at db level
+- `display_order INTEGER NOT NULL CHECK (display_order BETWEEN 0 AND 9)`
 - `caption TEXT`
 - `created_at`, `updated_at` timestamps
 - `FOREIGN KEY (report_id, user_id) REFERENCES reports(id, user_id)`
-- `UNIQUE(report_id, display_order)` — ordering constraint
+- `UNIQUE(report_id, display_order) DEFERRABLE INITIALLY DEFERRED` — allows atomic swap of two positions in one transaction
+- `id`, `user_id`, `report_id`, `storage_path` are immutable after creation (enforced by `prevent_report_photo_identity_change` trigger)
+- **Write order:** INSERT metadata row → upload file to Storage
+- **Delete order:** delete file from Storage → DELETE metadata row
 
 ### 7. subscriptions
 - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
 - `user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
 - `stripe_customer_id TEXT UNIQUE`
 - `stripe_subscription_id TEXT UNIQUE`
-- `status TEXT NOT NULL CHECK (status IN ('incomplete','incomplete_expired','trialing','active','past_due','canceled','unpaid','paused'))` — all Stripe statuses permitted; only `trialing` and `active` grant access
-- `trial_end TIMESTAMPTZ`
-- `current_period_end TIMESTAMPTZ NOT NULL`
+- `status TEXT NOT NULL CHECK (status IN ('incomplete','incomplete_expired','trialing','active','past_due','canceled','unpaid','paused'))` — all Stripe statuses permitted
+- `trial_end TIMESTAMPTZ` — nullable
+- `current_period_end TIMESTAMPTZ` — **nullable**; some statuses (incomplete, paused, canceled) carry no meaningful period end
 - `cancel_at_period_end BOOLEAN NOT NULL DEFAULT false`
 - `stripe_event_created_at TIMESTAMPTZ` — used for out-of-order event protection
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
 - `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+- Access: `trialing` + non-null future `trial_end`, or `active` + non-null future `current_period_end` — enforced by `has_active_access()`
 
 ### 8. stripe_webhook_events
 - `stripe_event_id TEXT PRIMARY KEY` — Stripe event ID (evt_xxx)
@@ -168,6 +176,9 @@ Explicit named policies per operation per table are required. Generic `FOR ALL U
 ## 4. PRIVILEGED FUNCTIONS
 
 ### Subscription Access Function
+
+`IS NOT NULL` guards are required because `current_period_end` is nullable; a null date must not evaluate as future.
+
 ```sql
 CREATE OR REPLACE FUNCTION public.has_active_access()
 RETURNS boolean
@@ -178,18 +189,23 @@ SET search_path = ''
 AS $$
   SELECT EXISTS (
     SELECT 1
-    FROM public.subscriptions s
+    FROM public.subscriptions AS s
     WHERE s.user_id = auth.uid()
       AND (
-        (s.status = 'trialing' AND s.trial_end > now())
+        (s.status = 'trialing'
+          AND s.trial_end IS NOT NULL
+          AND s.trial_end > now())
         OR
-        (s.status = 'active' AND s.current_period_end > now())
+        (s.status = 'active'
+          AND s.current_period_end IS NOT NULL
+          AND s.current_period_end > now())
       )
   )
 $$;
 
-REVOKE ALL ON FUNCTION public.has_active_access() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.has_active_access() TO authenticated;
+REVOKE ALL     ON FUNCTION public.has_active_access() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.has_active_access() FROM anon;
+GRANT  EXECUTE ON FUNCTION public.has_active_access() TO authenticated;
 ```
 
 ### Atomic Report Creation Function
@@ -254,10 +270,7 @@ GRANT EXECUTE ON FUNCTION public.create_report(UUID) TO authenticated;
 
 ```sql
 CREATE OR REPLACE FUNCTION public.prevent_report_identity_change()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = ''
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = ''
 AS $$
 BEGIN
   IF NEW.id            IS DISTINCT FROM OLD.id            THEN RAISE EXCEPTION 'id is immutable'; END IF;
@@ -267,12 +280,32 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
 REVOKE ALL ON FUNCTION public.prevent_report_identity_change() FROM PUBLIC;
-
 CREATE TRIGGER trg_reports_immutable_identity
-  BEFORE UPDATE ON public.reports
-  FOR EACH ROW EXECUTE FUNCTION public.prevent_report_identity_change();
+  BEFORE UPDATE ON public.reports FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_report_identity_change();
+```
+
+### Immutable Photo Identity Trigger
+
+`public.prevent_report_photo_identity_change()` rejects any UPDATE that changes `id`, `user_id`, `report_id`, or `storage_path`. Only `caption`, `display_order`, and `updated_at` may be changed. Protecting `storage_path` is critical: the Storage policy correlates Storage objects to metadata rows via `rp.storage_path = name`; changing `storage_path` would silently orphan the underlying Storage object.
+
+```sql
+CREATE OR REPLACE FUNCTION public.prevent_report_photo_identity_change()
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.id           IS DISTINCT FROM OLD.id           THEN RAISE EXCEPTION 'id is immutable'; END IF;
+  IF NEW.user_id      IS DISTINCT FROM OLD.user_id      THEN RAISE EXCEPTION 'user_id is immutable'; END IF;
+  IF NEW.report_id    IS DISTINCT FROM OLD.report_id    THEN RAISE EXCEPTION 'report_id is immutable'; END IF;
+  IF NEW.storage_path IS DISTINCT FROM OLD.storage_path THEN RAISE EXCEPTION 'storage_path is immutable'; END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.prevent_report_photo_identity_change() FROM PUBLIC;
+CREATE TRIGGER trg_report_photos_immutable_identity
+  BEFORE UPDATE ON public.report_photos FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_report_photo_identity_change();
 ```
 
 ---
@@ -281,44 +314,52 @@ CREATE TRIGGER trg_reports_immutable_identity
 
 ### Buckets
 
-Three private buckets with explicit size limits and MIME type allowlists:
+Three private buckets with explicit size limits and MIME type allowlists. The `company-logos` bucket is **JPEG-only** for MVP; the browser converts the selected image to JPEG before upload.
 
 | Bucket | Max Size | Allowed MIME types |
 |--------|----------|--------------------|
-| `company-logos` | 2 MB | `image/jpeg`, `image/png`, `image/webp` |
+| `company-logos` | 2 MB | `image/jpeg` (JPEG-only; browser converts) |
 | `report-photos` | 400 KB (409,600 bytes) | `image/jpeg` |
 | `report-pdfs` | 10 MB | `application/pdf` |
 
-Bucket INSERT uses `ON CONFLICT DO UPDATE` to force `public = false`, correct `file_size_limit`, and correct `allowed_mime_types` even if a bucket with that ID already exists.
+Bucket INSERT uses `ON CONFLICT DO UPDATE` to force `public = false`, correct `file_size_limit`, and correct `allowed_mime_types` even if a bucket with that ID already exists. `ON CONFLICT DO NOTHING` is not used for security-relevant bucket settings.
 
 ### Path Model
 
 | Bucket | Path | Notes |
 |--------|------|-------|
-| `company-logos` | `users/{userId}/logo.jpg` | Fixed filename |
-| `report-photos` | `users/{userId}/reports/{reportId}/{photoId}.jpg` | One file per display_order |
+| `company-logos` | `users/{userId}/logo.jpg` | Fixed filename; one logo per user |
+| `report-photos` | `users/{userId}/reports/{reportId}/{photoId}.jpg` | Client generates photoId |
 | `report-pdfs` | `users/{userId}/reports/{reportId}/report.pdf` | Fixed filename |
 
 ### Storage RLS Policies (`storage.objects`) — all `TO authenticated`
 
 **company-logos:**
-- SELECT, INSERT, UPDATE, DELETE: path owner check + `storage.filename(name) = 'logo.jpg'`
+- SELECT, INSERT, UPDATE, DELETE: `(foldername)[1]='users' AND (foldername)[2]=auth.uid()::text AND filename='logo.jpg'`
 
-**report-photos:**
-- SELECT: path owner check (expired users retain read access)
-- INSERT: path owner check + `has_active_access()` + pre-registration check (`report_photos.storage_path = name AND report_photos.user_id = auth.uid()` must exist — metadata row must be inserted before the file upload)
-- UPDATE, DELETE: path owner check + `has_active_access()`
+**report-photos — metadata correlation required for ALL operations:**
+- SELECT: `EXISTS (SELECT 1 FROM report_photos rp WHERE rp.user_id = auth.uid() AND rp.storage_path = name)` (no active-access required for read — expired owners retain access)
+- INSERT: same EXISTS check + `has_active_access()`
+- UPDATE USING and WITH CHECK: same EXISTS check + `has_active_access()`
+- DELETE: same EXISTS check + `has_active_access()`
+- An orphaned Storage object (no metadata row) is inaccessible to any authenticated user.
 
-**report-pdfs:**
-- SELECT: path owner check + `storage.filename(name) = 'report.pdf'` + `reports.id = path[4]::uuid AND reports.user_id = auth.uid()` (prevents invented directories)
-- INSERT: same as SELECT PLUS `has_active_access()`
-- UPDATE: same as INSERT (permits PDF regeneration/upsert for entitled owners)
+**report-pdfs — canonical text path comparison (no UUID cast):**
+- `EXISTS (SELECT 1 FROM reports r WHERE r.user_id = auth.uid() AND name = 'users/' || auth.uid()::text || '/reports/' || r.id::text || '/report.pdf')`
+- Malformed paths produce no subquery match and evaluate to false — no UUID-cast error.
+- SELECT: report-ownership EXISTS check (expired owners retain access)
+- INSERT: EXISTS check + `has_active_access()`
+- UPDATE USING and WITH CHECK: EXISTS check + `has_active_access()` (permits PDF regeneration/upsert)
+
+### Storage Operation Order
+- **Write:** INSERT `report_photos` metadata row → upload file to Storage (Storage policy requires pre-existing metadata row)
+- **Delete:** Delete file from Storage → DELETE `report_photos` metadata row (deleting metadata first orphans the Storage object permanently)
 
 ### Storage Rules
-- `logo_storage_path` and `generated_pdf_storage_path` store the stable object key — NEVER a signed URL.
-- `report_photos.storage_path` stores the stable object key — NEVER a signed URL.
+- `logo_storage_path`, `generated_pdf_storage_path`, and `report_photos.storage_path` store the stable object key — NEVER a signed URL.
 - Signed URLs are generated on demand for sharing/download and are never persisted.
 - Browser-side file type and size validation is a UX control only. Bucket `allowed_mime_types` and `file_size_limit` are the authoritative security controls.
+- Canonical path CHECKs at the table level and Storage policies at the bucket level both enforce the same path format — defence in depth.
 
 ---
 
