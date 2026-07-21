@@ -1,6 +1,6 @@
 -- =============================================================================
--- SiteBrief — Initial Schema Migration (revision 3)
--- File: supabase/migrations/001_initial.sql
+-- SiteBrief — Initial Schema Migration (revision 4)
+-- File: supabase/migrations/20260721000000_initial.sql
 -- Source of truth: ARCHITECTURE.md §2–§5
 --
 -- DO NOT run ad hoc or without review.
@@ -599,8 +599,8 @@ CREATE TRIGGER trg_reports_immutable_identity
 -- Prevents UPDATE from changing id, user_id, report_id, or storage_path.
 -- Only caption, display_order, and updated_at may be changed.
 -- Protecting storage_path is critical because the Storage policy correlates
--- the file object to the metadata row via storage_path = name; changing
--- storage_path would silently orphan the underlying Storage object.
+-- the file object to the metadata row via rp.storage_path = storage.objects.name;
+-- changing storage_path would silently orphan the underlying Storage object.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.prevent_report_photo_identity_change()
@@ -706,51 +706,43 @@ ON CONFLICT (id) DO UPDATE SET
 
 -- ---------------------------------------------------------------------------
 -- A. company-logos
--- Path: users/{userId}/logo.jpg  (fixed filename enforced by policy)
--- The CHECK constraint on company_profiles already enforces the canonical
--- path at the metadata level; these policies enforce it at the Storage level.
--- SELECT, INSERT, UPDATE, DELETE all require the exact canonical filename.
+-- Path: users/{userId}/logo.jpg  (exactly two path segments; fixed filename)
+-- Exact canonical text comparison prevents deeper paths such as
+-- users/{userId}/extra/logo.jpg from matching.
+-- The CHECK constraint on company_profiles enforces the same path at the
+-- metadata level; this policy enforces it at the Storage level.
+-- All five operations compare storage.objects.name to the single canonical key.
 -- ---------------------------------------------------------------------------
 CREATE POLICY "storage_logos_select_own"
   ON storage.objects FOR SELECT TO authenticated
   USING (
     bucket_id = 'company-logos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND storage.filename(name) = 'logo.jpg'
+    AND storage.objects.name = 'users/' || auth.uid()::text || '/logo.jpg'
   );
 
 CREATE POLICY "storage_logos_insert_own"
   ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'company-logos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND storage.filename(name) = 'logo.jpg'
+    AND storage.objects.name = 'users/' || auth.uid()::text || '/logo.jpg'
   );
 
 CREATE POLICY "storage_logos_update_own"
   ON storage.objects FOR UPDATE TO authenticated
   USING (
     bucket_id = 'company-logos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND storage.filename(name) = 'logo.jpg'
+    AND storage.objects.name = 'users/' || auth.uid()::text || '/logo.jpg'
   )
   WITH CHECK (
     bucket_id = 'company-logos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND storage.filename(name) = 'logo.jpg'
+    AND storage.objects.name = 'users/' || auth.uid()::text || '/logo.jpg'
   );
 
 CREATE POLICY "storage_logos_delete_own"
   ON storage.objects FOR DELETE TO authenticated
   USING (
     bucket_id = 'company-logos'
-    AND (storage.foldername(name))[1] = 'users'
-    AND (storage.foldername(name))[2] = auth.uid()::text
-    AND storage.filename(name) = 'logo.jpg'
+    AND storage.objects.name = 'users/' || auth.uid()::text || '/logo.jpg'
   );
 
 -- ---------------------------------------------------------------------------
@@ -783,7 +775,7 @@ CREATE POLICY "storage_photos_select_own"
       SELECT 1
       FROM public.report_photos AS rp
       WHERE rp.user_id      = auth.uid()
-        AND rp.storage_path = name
+        AND rp.storage_path = storage.objects.name
     )
   );
 
@@ -796,7 +788,7 @@ CREATE POLICY "storage_photos_insert_own_active"
       SELECT 1
       FROM public.report_photos AS rp
       WHERE rp.user_id      = auth.uid()
-        AND rp.storage_path = name
+        AND rp.storage_path = storage.objects.name
     )
   );
 
@@ -809,7 +801,7 @@ CREATE POLICY "storage_photos_update_own_active"
       SELECT 1
       FROM public.report_photos AS rp
       WHERE rp.user_id      = auth.uid()
-        AND rp.storage_path = name
+        AND rp.storage_path = storage.objects.name
     )
   )
   WITH CHECK (
@@ -819,7 +811,7 @@ CREATE POLICY "storage_photos_update_own_active"
       SELECT 1
       FROM public.report_photos AS rp
       WHERE rp.user_id      = auth.uid()
-        AND rp.storage_path = name
+        AND rp.storage_path = storage.objects.name
     )
   );
 
@@ -832,7 +824,7 @@ CREATE POLICY "storage_photos_delete_own_active"
       SELECT 1
       FROM public.report_photos AS rp
       WHERE rp.user_id      = auth.uid()
-        AND rp.storage_path = name
+        AND rp.storage_path = storage.objects.name
     )
   );
 

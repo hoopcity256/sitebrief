@@ -23,7 +23,7 @@
 
 ## 2. DATABASE SCHEMA
 
-The following exact objects are specified for the initial migration (`supabase/migrations/001_initial.sql`).
+The following exact objects are specified for the initial migration (`supabase/migrations/20260721000000_initial.sql`).
 
 ### 1. profiles
 - `id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE`
@@ -403,7 +403,7 @@ Bucket INSERT uses `ON CONFLICT DO UPDATE` to force `public = false`, correct `f
 
 ## 8. MIGRATION DELIVERY RULES
 
-- The migration file (`supabase/migrations/001_initial.sql`) is the single source of truth.
+- The migration file (`supabase/migrations/20260721000000_initial.sql`) is the single source of truth.
 - No ad hoc, unrecorded production SQL is ever to be run directly.
 - Execution occurs only after:
   1. The migration is reviewed and committed to the repository.

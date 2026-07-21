@@ -11,7 +11,7 @@
 - Architecture pivot documentation complete.
 - Create Vite + React + TypeScript project.
 - Configure React Router and mobile-first design shell.
-- Draft Supabase schema migrations as `supabase/migrations/001_initial.sql` (single source of truth). Do NOT execute SQL automatically.
+- Draft Supabase schema migrations as `supabase/migrations/20260721000000_initial.sql` (single source of truth). Do NOT execute SQL automatically.
 - Configure Supabase Auth: Site URL `https://sitebrief.scope-guard.com`; allowed redirect URLs per ARCHITECTURE.md §9.
 - Implement Supabase Auth (email/password, confirmation, password reset). Magic link is explicitly out of scope.
 - Deploy staging URL to Cloudflare Pages (`*.pages.dev`).
@@ -60,7 +60,7 @@
 ---
 
 ## MIGRATION DELIVERY RULES
-- The migration file (`supabase/migrations/001_initial.sql`) is the single source of truth.
+- The migration file (`supabase/migrations/20260721000000_initial.sql`) is the single source of truth.
 - No ad hoc, unrecorded production SQL is ever to be run directly.
 - The architect and implementation agent do not execute migrations. Only the human owner applies migrations to production.
 
