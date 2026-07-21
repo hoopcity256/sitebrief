@@ -9,6 +9,10 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 - [x] Create Vite + React + TypeScript project
 - [x] Configure React Router and mobile-first design shell
 - [x] Draft Supabase schema migrations `20260721000000_initial.sql` (do not run)
+- [x] Supabase CLI initialised (`supabase/config.toml`, `supabase/.gitignore` committed)
+- [x] Migration `20260721000000_initial.sql` applied to `sitebrief-test` (toitahshmkxazxqqopzg) — zero SQL errors, zero lint findings
+- [!] Migration `20260721000000_initial.sql` **pending on production** (`sitebrief`, qbycpzfyugrsbckrpyak) — awaiting human owner authorization
+- [!] RLS and Storage functional acceptance tests (T-SEC, T-STOR, T-PATH) **pending** — require production migration to be applied first
 - [ ] Configure Supabase allowed redirect URLs
 - [ ] Implement Supabase Auth (email/password, confirmation, reset)
 - [ ] Deploy staging URL to Cloudflare Pages
@@ -55,7 +59,7 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 |---|----------------|-------|--------|
 | H1 | Create or verify Stripe account | Human | ⬜ Not started |
 | H2 | Complete Stripe business verification (required before live payments) | Human | ⬜ Not started |
-| H3 | Create Supabase project and note project URL + anon key | Human | ⬜ Not started |
+| H3 | Create Supabase project and note project URL + anon key | Human | ✅ Complete — `sitebrief` project created; `sitebrief-test` validated |
 | H4 | Production domain confirmed: `sitebrief.scope-guard.com` | Human | ✅ Confirmed |
 | H5 | Create monthly ($9.99) and annual ($79.99) Stripe prices with 14-day trials | Human | ⬜ Not started |
 | H6 | Configure Stripe Customer Portal (allowed cancellation, plan switching) | Human | ⬜ Not started |
