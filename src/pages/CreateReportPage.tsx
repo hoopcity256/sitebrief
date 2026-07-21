@@ -1,13 +1,27 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 import { getReport, updateReport } from '../lib/reports'
 import { saveDraft, loadDraft, clearDraft } from '../lib/draftRecovery'
+import { uploadPhoto } from '../lib/photoUpload'
+import { deletePhoto } from '../lib/photoDelete'
 
 export const CreateReportPage = () => {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams] = useSearchParams()
   const reportId = searchParams.get('reportId')
   const navigate = useNavigate()
+  const { user } = useAuth()
+
+  interface PhotoSlot {
+    photoId: string
+    storagePath: string
+    thumbnailUrl: string
+    uploading?: boolean
+    error?: string
+  }
+  const [photos, setPhotos] = useState<PhotoSlot[]>([])
+  const photoUrlsRef = useRef<Set<string>>(new Set())
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -175,6 +189,62 @@ export const CreateReportPage = () => {
     if (reportId) clearDraft(reportId).catch(() => {})
   }
 
+  // --- Photo handlers ---
+
+  const handlePhotoSelect = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !user || !reportId) return
+    const file = files[0]
+    const tempId = crypto.randomUUID()
+    const tempSlot: PhotoSlot = { photoId: tempId, storagePath: '', thumbnailUrl: '', uploading: true }
+    setPhotos(prev => [...prev, tempSlot])
+
+    try {
+      const result = await uploadPhoto(file, user.id, reportId, photos.length)
+      const thumbUrl = URL.createObjectURL(result.thumbnailBlob)
+      photoUrlsRef.current.add(thumbUrl)
+      setPhotos(prev => prev.map(p =>
+        p.photoId === tempId
+          ? { photoId: result.photoId, storagePath: result.storagePath, thumbnailUrl: thumbUrl }
+          : p
+      ))
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Upload failed'
+      setPhotos(prev => prev.map(p =>
+        p.photoId === tempId
+          ? { ...p, uploading: false, error: msg.length > 60 ? 'Photo could not be uploaded.' : msg }
+          : p
+      ))
+    }
+  }
+
+  const handleDeletePhoto = async (index: number) => {
+    const photo = photos[index]
+    if (!photo || photo.uploading) return
+    // Revoke thumbnail URL
+    if (photo.thumbnailUrl) {
+      URL.revokeObjectURL(photo.thumbnailUrl)
+      photoUrlsRef.current.delete(photo.thumbnailUrl)
+    }
+    // Remove from local state immediately for responsiveness
+    setPhotos(prev => prev.filter((_, i) => i !== index))
+    // Delete from backend if it was successfully uploaded
+    if (photo.storagePath) {
+      try {
+        await deletePhoto(photo.photoId, photo.storagePath)
+      } catch {
+        // Best-effort — photo slot already removed from UI
+      }
+    }
+  }
+
+  // Cleanup all object URLs on unmount
+  useEffect(() => {
+    return () => {
+      photoUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+      photoUrlsRef.current.clear()
+    }
+  }, [])
+
   const handleDone = async () => {
     if (!reportId || finishing) return
     setFinishing(true)
@@ -289,9 +359,42 @@ export const CreateReportPage = () => {
           />
         </label>
 
-        {/* Photo picker — wired in T3.7 */}
-        <div style={styles.photoPlaceholder}>
-          <span>📷 Photos — coming in the next update</span>
+        {/* Photo section */}
+        <div style={styles.photoSection}>
+          <h3 style={styles.photoHeading}>📷 Photos ({photos.length}/10)</h3>
+          <div style={styles.photoGrid}>
+            {photos.map((p, i) => (
+              <div key={p.photoId} style={styles.photoSlot}>
+                {p.uploading ? (
+                  <div style={styles.photoUploading}><div style={styles.spinner} /></div>
+                ) : p.error ? (
+                  <div style={styles.photoError}>{p.error}</div>
+                ) : (
+                  <img src={p.thumbnailUrl} alt={`Photo ${i + 1}`} style={styles.photoThumb} />
+                )}
+                <button
+                  onClick={() => handleDeletePhoto(i)}
+                  style={styles.photoDeleteBtn}
+                  aria-label={`Delete photo ${i + 1}`}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {photos.length < 10 && (
+              <label style={styles.photoAddSlot}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => handlePhotoSelect(e.target.files)}
+                  style={{ display: 'none' }}
+                />
+                <span style={styles.photoAddIcon}>+</span>
+                <span style={styles.photoAddLabel}>Add Photo</span>
+              </label>
+            )}
+          </div>
         </div>
 
         <button
@@ -322,7 +425,17 @@ const styles: Record<string, React.CSSProperties> = {
   editorBody: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
   label: { display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '14px', fontWeight: 600, color: '#495057' },
   textarea: { padding: '12px', borderRadius: '8px', border: '1px solid #DEE2E6', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical' as const, outline: 'none', minHeight: '96px' },
-  photoPlaceholder: { padding: '20px 16px', border: '2px dashed #DEE2E6', borderRadius: '10px', textAlign: 'center', color: '#ADB5BD', fontSize: '14px' },
+  photoSection: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  photoHeading: { fontSize: '14px', fontWeight: 600, color: '#495057', margin: 0 },
+  photoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px' },
+  photoSlot: { position: 'relative', aspectRatio: '1', borderRadius: '8px', overflow: 'hidden', border: '1px solid #DEE2E6', background: '#FFFFFF' },
+  photoThumb: { width: '100%', height: '100%', objectFit: 'cover' },
+  photoUploading: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F1F3F5' },
+  photoError: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFF3F3', color: '#DC3545', fontSize: '11px', padding: '4px', textAlign: 'center' },
+  photoDeleteBtn: { position: 'absolute', top: '2px', right: '2px', width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(0,0,0,0.5)', color: '#FFF', border: 'none', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  photoAddSlot: { aspectRatio: '1', borderRadius: '8px', border: '2px dashed #DEE2E6', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer', background: '#F8F9FA' },
+  photoAddIcon: { fontSize: '24px', color: '#6C757D' },
+  photoAddLabel: { fontSize: '11px', color: '#6C757D' },
   doneBtn: { minHeight: '48px', background: '#198754', color: '#FFF', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px' },
   recoveryBanner: { margin: '8px 16px 0', padding: '12px 16px', background: '#FFF8E1', border: '1px solid #FFCA28', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '14px', color: '#795548', gap: '8px' },
   recoveryActions: { display: 'flex', gap: '8px', flexShrink: 0 },
