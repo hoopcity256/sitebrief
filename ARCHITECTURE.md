@@ -50,16 +50,16 @@ The following exact objects are specified for the initial migration (`supabase/m
 ### 4. project_report_counters
 - `project_id UUID NOT NULL`
 - `user_id UUID NOT NULL`
-- `last_report_number INTEGER NOT NULL DEFAULT 0`
+- `last_report_number INTEGER NOT NULL DEFAULT 0 CHECK (last_report_number >= 0)`
 - `PRIMARY KEY(project_id)`
 - `FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id)`
-- No direct browser access (no RLS policies; access only through privileged functions)
+- No direct browser access (REVOKE ALL from anon, authenticated; access only through `create_report()`)
 
 ### 5. reports
 - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
 - `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
 - `project_id UUID NOT NULL`
-- `report_number INTEGER NOT NULL`
+- `report_number INTEGER NOT NULL CHECK (report_number > 0)`
 - `is_draft BOOLEAN NOT NULL DEFAULT true`
 - `work_completed TEXT`, `problems TEXT`, `next_steps TEXT`
 - `generated_pdf_storage_path TEXT` — stable Supabase Storage path, NEVER a signed or expiring URL
@@ -68,7 +68,7 @@ The following exact objects are specified for the initial migration (`supabase/m
 - `UNIQUE(id, user_id)`
 - `UNIQUE(project_id, report_number)` — final atomicity guard
 - `FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id)`
-- `report_number` is immutable after creation (enforced with trigger)
+- `report_number` is immutable after creation (enforced by trigger)
 
 ### 6. report_photos
 - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
@@ -84,9 +84,9 @@ The following exact objects are specified for the initial migration (`supabase/m
 ### 7. subscriptions
 - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
 - `user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`
-- `stripe_customer_id TEXT UNIQUE` — uniqueness prevents duplicate customer mapping
-- `stripe_subscription_id TEXT UNIQUE` — uniqueness prevents duplicate subscription rows
-- `status TEXT NOT NULL CHECK (status IN ('trialing','active','past_due','canceled','unpaid'))`
+- `stripe_customer_id TEXT UNIQUE`
+- `stripe_subscription_id TEXT UNIQUE`
+- `status TEXT NOT NULL CHECK (status IN ('incomplete','incomplete_expired','trialing','active','past_due','canceled','unpaid','paused'))` — all Stripe statuses permitted; only `trialing` and `active` grant access
 - `trial_end TIMESTAMPTZ`
 - `current_period_end TIMESTAMPTZ NOT NULL`
 - `cancel_at_period_end BOOLEAN NOT NULL DEFAULT false`
@@ -98,8 +98,12 @@ The following exact objects are specified for the initial migration (`supabase/m
 - `stripe_event_id TEXT PRIMARY KEY` — Stripe event ID (evt_xxx)
 - `event_type TEXT NOT NULL`
 - `stripe_created_at TIMESTAMPTZ NOT NULL` — from event.created
-- `processed_at TIMESTAMPTZ NOT NULL DEFAULT now()`
-- `processing_error TEXT`
+- `processing_started_at TIMESTAMPTZ` — nullable; set when processing begins
+- `processed_at TIMESTAMPTZ` — nullable; set **only** on success (no DEFAULT)
+- `processing_error TEXT` — nullable; failure detail
+- `attempt_count INTEGER NOT NULL DEFAULT 0`
+- A row is eligible for retry when `processed_at IS NULL`.
+- A duplicate event may be skipped **only** when `processed_at IS NOT NULL`.
 
 ---
 
@@ -113,11 +117,15 @@ Explicit named policies per operation per table are required. Generic `FOR ALL U
 - **UPDATE:** `auth.uid() = id`
 - **DELETE:** not permitted directly (CASCADE from auth.users)
 
+**Table privileges:** `GRANT SELECT, INSERT, UPDATE TO authenticated`
+
 ### company_profiles
 - **SELECT:** `auth.uid() = user_id`
 - **INSERT:** `auth.uid() = user_id`
 - **UPDATE:** `auth.uid() = user_id`
 - **DELETE:** not permitted directly
+
+**Table privileges:** `GRANT SELECT, INSERT, UPDATE TO authenticated`
 
 ### projects
 - **SELECT:** `auth.uid() = user_id`
@@ -125,14 +133,20 @@ Explicit named policies per operation per table are required. Generic `FOR ALL U
 - **UPDATE:** `auth.uid() = user_id`
 - **DELETE:** not permitted directly in MVP (archive instead)
 
+**Table privileges:** `GRANT SELECT, INSERT, UPDATE TO authenticated`
+
 ### project_report_counters
 - No direct browser policies. Access only through `create_report()` privileged function.
+
+**Table privileges:** `REVOKE ALL FROM anon, authenticated` — table not accessible from browser.
 
 ### reports
 - **SELECT:** `auth.uid() = user_id` — always permitted regardless of subscription state.
 - **INSERT:** PROHIBITED for browser clients. All inserts go through `create_report()`.
 - **UPDATE:** `auth.uid() = user_id AND public.has_active_access()`
 - **DELETE:** not permitted directly in MVP
+
+**Table privileges:** `GRANT SELECT, UPDATE TO authenticated` — no direct INSERT or DELETE.
 
 ### report_photos
 - **SELECT:** `auth.uid() = user_id`
@@ -143,6 +157,8 @@ Explicit named policies per operation per table are required. Generic `FOR ALL U
 ### subscriptions
 - **SELECT:** `auth.uid() = user_id` — read own row only
 - **INSERT, UPDATE, DELETE:** PROHIBITED for browser clients (Edge Functions use service-role)
+
+**Table privileges:** `GRANT SELECT TO authenticated`; `GRANT SELECT, INSERT, UPDATE TO service_role`.
 
 ### stripe_webhook_events
 - No browser policies at all.
@@ -232,46 +248,77 @@ REVOKE ALL ON FUNCTION public.create_report(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.create_report(UUID) TO authenticated;
 ```
 
-### Immutable Report Number Trigger
+### Immutable Report Identity Trigger
+
+`public.prevent_report_identity_change()` rejects any UPDATE that changes `id`, `user_id`, `project_id`, or `report_number`. Report content fields and `updated_at` remain editable.
+
 ```sql
-CREATE OR REPLACE FUNCTION public.prevent_report_number_change()
+CREATE OR REPLACE FUNCTION public.prevent_report_identity_change()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY INVOKER
 SET search_path = ''
 AS $$
 BEGIN
-  IF NEW.report_number IS DISTINCT FROM OLD.report_number THEN
-    RAISE EXCEPTION 'report_number is immutable';
-  END IF;
+  IF NEW.id            IS DISTINCT FROM OLD.id            THEN RAISE EXCEPTION 'id is immutable'; END IF;
+  IF NEW.user_id       IS DISTINCT FROM OLD.user_id       THEN RAISE EXCEPTION 'user_id is immutable'; END IF;
+  IF NEW.project_id    IS DISTINCT FROM OLD.project_id    THEN RAISE EXCEPTION 'project_id is immutable'; END IF;
+  IF NEW.report_number IS DISTINCT FROM OLD.report_number THEN RAISE EXCEPTION 'report_number is immutable'; END IF;
   RETURN NEW;
 END;
 $$;
 
-CREATE TRIGGER trg_reports_immutable_number
+REVOKE ALL ON FUNCTION public.prevent_report_identity_change() FROM PUBLIC;
+
+CREATE TRIGGER trg_reports_immutable_identity
   BEFORE UPDATE ON public.reports
-  FOR EACH ROW EXECUTE FUNCTION public.prevent_report_number_change();
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_report_identity_change();
 ```
 
 ---
 
 ## 5. SUPABASE STORAGE
 
-**Bucket structure:** Single private bucket named `user-content`.
-**Path model:**
-- `users/{userId}/logos/{filename}`
-- `users/{userId}/reports/{reportId}/photos/{filename}`
-- `users/{userId}/reports/{reportId}/pdfs/{filename}`
+### Buckets
 
-### Storage RLS Policies (on `storage.objects`)
+Three private buckets with explicit size limits and MIME type allowlists:
 
-- **Logo read (SELECT):** `(storage.foldername(name))[1] = 'users' AND (storage.foldername(name))[2] = auth.uid()::text AND (storage.foldername(name))[3] = 'logos'`
-- **Logo write (INSERT/UPDATE):** Path check PLUS `auth.uid() IS NOT NULL`
-- **Report photo read (SELECT):** Path prefix matches `users/{auth.uid()}/reports/`
-- **Report photo write (INSERT/UPDATE/DELETE):** Path prefix matches `users/{auth.uid()}/reports/` AND `public.has_active_access()`
-- **Report PDF read (SELECT):** Path prefix matches `users/{auth.uid()}/reports/`
-- **Report PDF write (INSERT):** Path prefix matches `users/{auth.uid()}/reports/` AND `public.has_active_access()`
+| Bucket | Max Size | Allowed MIME types |
+|--------|----------|--------------------|
+| `company-logos` | 2 MB | `image/jpeg`, `image/png`, `image/webp` |
+| `report-photos` | 400 KB (409,600 bytes) | `image/jpeg` |
+| `report-pdfs` | 10 MB | `application/pdf` |
 
-*Note:* Signed URLs are generated on demand for sharing, NEVER persisted in Postgres. `logo_storage_path` and `generated_pdf_storage_path` store the stable object key. File type and size validation is done in the browser; Storage policies are the authoritative security control.
+Bucket INSERT uses `ON CONFLICT DO UPDATE` to force `public = false`, correct `file_size_limit`, and correct `allowed_mime_types` even if a bucket with that ID already exists.
+
+### Path Model
+
+| Bucket | Path | Notes |
+|--------|------|-------|
+| `company-logos` | `users/{userId}/logo.jpg` | Fixed filename |
+| `report-photos` | `users/{userId}/reports/{reportId}/{photoId}.jpg` | One file per display_order |
+| `report-pdfs` | `users/{userId}/reports/{reportId}/report.pdf` | Fixed filename |
+
+### Storage RLS Policies (`storage.objects`) — all `TO authenticated`
+
+**company-logos:**
+- SELECT, INSERT, UPDATE, DELETE: path owner check + `storage.filename(name) = 'logo.jpg'`
+
+**report-photos:**
+- SELECT: path owner check (expired users retain read access)
+- INSERT: path owner check + `has_active_access()` + pre-registration check (`report_photos.storage_path = name AND report_photos.user_id = auth.uid()` must exist — metadata row must be inserted before the file upload)
+- UPDATE, DELETE: path owner check + `has_active_access()`
+
+**report-pdfs:**
+- SELECT: path owner check + `storage.filename(name) = 'report.pdf'` + `reports.id = path[4]::uuid AND reports.user_id = auth.uid()` (prevents invented directories)
+- INSERT: same as SELECT PLUS `has_active_access()`
+- UPDATE: same as INSERT (permits PDF regeneration/upsert for entitled owners)
+
+### Storage Rules
+- `logo_storage_path` and `generated_pdf_storage_path` store the stable object key — NEVER a signed URL.
+- `report_photos.storage_path` stores the stable object key — NEVER a signed URL.
+- Signed URLs are generated on demand for sharing/download and are never persisted.
+- Browser-side file type and size validation is a UX control only. Bucket `allowed_mime_types` and `file_size_limit` are the authoritative security controls.
 
 ---
 
