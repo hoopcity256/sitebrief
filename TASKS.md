@@ -8,7 +8,7 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 - [x] Pivot architecture documentation to PWA/Supabase/Stripe
 - [x] Create Vite + React + TypeScript project
 - [x] Configure React Router and mobile-first design shell
-- [ ] Draft Supabase schema migrations `001_initial.sql` (do not run)
+- [x] Draft Supabase schema migrations `001_initial.sql` (do not run)
 - [ ] Configure Supabase allowed redirect URLs
 - [ ] Implement Supabase Auth (email/password, confirmation, reset)
 - [ ] Deploy staging URL to Cloudflare Pages
