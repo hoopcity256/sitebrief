@@ -1,0 +1,65 @@
+# TASKS.md — SiteBrief PWA Living Task Tracker
+
+Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
+
+---
+
+## Day 2 — Foundation
+- [x] Pivot architecture documentation to PWA/Supabase/Stripe
+- [x] Create Vite + React + TypeScript project
+- [x] Configure React Router and mobile-first design shell
+- [ ] Create Supabase project, run schema migrations, enable RLS (include `project_report_counters`)
+- [ ] Configure Supabase allowed redirect URLs
+- [x] Implement Supabase Auth
+- [ ] Deploy staging URL to Cloudflare Pages
+
+## Day 3 — Core App
+- [ ] Onboarding flow (company profile to Supabase)
+- [ ] Project CRUD (create, list, archive)
+- [ ] Report editor (text fields)
+- [ ] Browser photo selection, compression pipeline, Supabase Storage upload
+- [ ] IndexedDB draft recovery
+
+## Day 4 — PDF
+- [ ] Client-side PDF with `@react-pdf/renderer`
+- [ ] Report history (list and tap to view/share)
+- [ ] Web Share API integration; download fallback
+- [ ] Cross-browser PDF testing
+
+## Day 5 — Billing
+- [ ] Stripe products, prices, and 14-day trial configuration
+- [ ] `create-checkout-session` Edge Function (explicit trial config)
+- [ ] `stripe-webhook` Edge Function (idempotent, via `stripe_webhook_events`)
+- [ ] `create-portal-session` Edge Function
+- [ ] Subscription access gates
+
+## Day 6 — Polish and Security
+- [ ] Full QA pass
+- [ ] RLS security review
+- [ ] Error handling and empty states
+- [ ] Static pages (privacy, terms, etc.)
+- [ ] Add `public/_redirects` and `public/_headers` (CSP) for Cloudflare Pages
+- [ ] Production deployment to Cloudflare Pages with custom domain
+
+## Day 7 — Launch
+- [ ] Final full acceptance test pass
+- [ ] Billing switch to live mode
+- [ ] Production environment variables confirmed
+- [ ] Public launch
+
+---
+
+## HUMAN DEPENDENCIES
+
+| # | Action Required | Owner | Status |
+|---|----------------|-------|--------|
+| H1 | Create or verify Stripe account | Human | ⬜ Not started |
+| H2 | Complete Stripe business verification (required before live payments) | Human | ⬜ Not started |
+| H3 | Create Supabase project and note project URL + anon key | Human | ⬜ Not started |
+| H4 | Choose and acquire production domain name | Human | ⬜ Not started |
+| H5 | Create monthly ($9.99) and annual ($79.99) Stripe prices with 14-day trials | Human | ⬜ Not started |
+| H6 | Configure Stripe Customer Portal (allowed cancellation, plan switching) | Human | ⬜ Not started |
+| H7 | Configure Stripe webhook endpoint after first deployment (add endpoint URL, copy signing secret) | Human | ⬜ Not started |
+| H8 | Add production environment variables and Supabase Edge Function secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_MONTHLY_PRICE_ID, STRIPE_ANNUAL_PRICE_ID) | Human | ⬜ Not started |
+| H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
+| H10 | Create Cloudflare Pages project and connect to Git repository | Human | ⬜ Not started |

@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/authguard.tsx","./src/context/authcontext.tsx","./src/lib/auth.ts","./src/lib/supabase.ts","./src/pages/loginpage.tsx","./src/pages/passwordresetpage.tsx","./src/pages/placeholders.tsx","./src/pages/signuppage.tsx","./src/pages/updatepasswordpage.tsx"],"version":"5.9.3"}
