@@ -12,9 +12,9 @@
 - Create Vite + React + TypeScript project.
 - Configure React Router and mobile-first design shell.
 - Create Supabase project, run schema migrations (including `project_report_counters`), enable RLS.
-- Configure Supabase allowed redirect URLs.
-- Implement Supabase Auth (email/password and magic link).
-- Deploy staging URL to Cloudflare Pages.
+- Configure Supabase Auth: Site URL `https://sitebrief.scope-guard.com`; allowed redirect URLs per ARCHITECTURE.md §9.
+- Implement Supabase Auth (email/password, confirmation, password reset). Magic link is not in scope for MVP.
+- Deploy staging URL to Cloudflare Pages (`*.pages.dev`).
 - **Exit criteria:** Auth sign-up/sign-in works on mobile Safari and Chrome; staging URL is live.
 
 ### Day 3 — Core App
@@ -45,9 +45,9 @@
 - RLS security review (test two-user isolation).
 - Error handling and empty states.
 - Landing page, privacy policy, terms, support, and refund policy pages.
-- Configure Cloudflare Pages SPA Routing (`public/_redirects`) and security headers (`public/_headers`).
-- Production deployment to Cloudflare Pages with custom domain.
-- **Exit criteria:** All A–K acceptance tests pass; RLS isolation confirmed.
+- Confirm `public/_redirects` (`/* /index.html 200`) and `public/_headers` (CSP) are committed.
+- Production deployment to Cloudflare Pages: create dedicated SiteBrief Pages project, connect SiteBrief GitHub repo, verify `*.pages.dev` build, add custom domain `sitebrief.scope-guard.com` in Pages → Custom domains.
+- **Exit criteria:** All A–K acceptance tests pass; RLS isolation confirmed; `https://sitebrief.scope-guard.com` is live.
 
 ### Day 7 — Launch
 - Final full acceptance test pass.
@@ -66,10 +66,10 @@
 | H1 | Create or verify Stripe account | Human | ⬜ Not started |
 | H2 | Complete Stripe business verification (required before live payments) | Human | ⬜ Not started |
 | H3 | Create Supabase project and note project URL + anon key | Human | ⬜ Not started |
-| H4 | Choose and acquire production domain name | Human | ⬜ Not started |
+| H4 | Production domain confirmed: `sitebrief.scope-guard.com` | Human | ✅ Confirmed |
 | H5 | Create monthly ($9.99) and annual ($79.99) Stripe prices with 14-day trials | Human | ⬜ Not started |
 | H6 | Configure Stripe Customer Portal (allowed cancellation, plan switching) | Human | ⬜ Not started |
-| H7 | Configure Stripe webhook endpoint after first deployment (add endpoint URL, copy signing secret) | Human | ⬜ Not started |
-| H8 | Add production environment variables and Supabase Edge Function secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_MONTHLY_PRICE_ID, STRIPE_ANNUAL_PRICE_ID) | Human | ⬜ Not started |
+| H7 | After first `*.pages.dev` deploy: add webhook endpoint `https://sitebrief.scope-guard.com/functions/v1/stripe-webhook` in Stripe dashboard; copy signing secret to Edge Function secrets | Human | ⬜ Not started |
+| H8 | Set Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID` | Human | ⬜ Not started |
 | H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
-| H10 | Create Cloudflare Pages project and connect to Git repository | Human | ⬜ Not started |
+| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add environment variables `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |

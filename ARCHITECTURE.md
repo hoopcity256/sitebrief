@@ -3,6 +3,11 @@
 **Status: Approved for implementation (PWA Pivot + Safety Addendum)**
 **Last updated: July 21, 2026**
 
+**Canonical production origin:** `https://sitebrief.scope-guard.com`
+
+> SiteBrief is deployed as a **dedicated Cloudflare Pages project** pointed at its own GitHub repository.
+> It must not modify or deploy over the existing scope-guard.com site.
+
 ---
 
 ## 1. TARGET STACK
@@ -141,22 +146,69 @@ The service worker must NOT cache:
 
 ## 9. AUTH REDIRECT SAFETY
 
-Configure the following allowed redirect URLs in the Supabase dashboard:
-- `http://localhost:5173/**` (local development)
-- `https://*.pages.dev/**` (Cloudflare preview deployments — document if wildcard subdomains are unsupported)
-- `https://<production-domain>/**` (production)
-- Stripe success and cancellation return URLs (e.g., `/billing/success`, `/billing/cancel`).
+Configure the following in the Supabase dashboard under **Authentication → URL Configuration**:
 
-Stripe `success_url` and `cancel_url` must be server-controlled. The browser must NOT supply an arbitrary redirect destination.
+**Site URL:**
+```
+https://sitebrief.scope-guard.com
+```
+
+**Allowed Redirect URLs:**
+```
+https://sitebrief.scope-guard.com/**
+https://sitebrief.scope-guard.com/login
+https://sitebrief.scope-guard.com/update-password
+https://sitebrief.scope-guard.com/billing/success
+https://sitebrief.scope-guard.com/billing/cancel
+http://localhost:5173/**
+```
+
+Note: `https://*.pages.dev/**` may be added for Cloudflare preview deployments if Supabase supports wildcard subdomains — verify in the Supabase dashboard before adding.
+
+**Stripe return URLs** (server-constructed — never from browser input):
+```
+success_url: https://sitebrief.scope-guard.com/billing/success
+cancel_url:  https://sitebrief.scope-guard.com/billing/cancel
+```
+
+The `create-checkout-session` Edge Function must construct these URLs from the hard-coded production origin (`https://sitebrief.scope-guard.com`). The browser must NOT supply a redirect destination.
 
 ---
 
-## 10. CLOUDFLARE PAGES SPA ROUTING
+## 10. CLOUDFLARE PAGES — DEPLOYMENT AND SPA ROUTING
 
-Configure SPA fallback for Cloudflare Pages:
-- Add a file at `public/_redirects` containing: `/* /index.html 200`
-- Do NOT add a top-level `404.html` unless a complete custom redirect table replaces the fallback behavior.
-- Add a `public/_headers` file for security headers (Content-Security-Policy, X-Frame-Options, etc.).
+**Production URL:** `https://sitebrief.scope-guard.com`
+
+### Vite and Router Configuration
+- `vite.config.ts` base remains `"/"` — SiteBrief is at the root of its subdomain.
+- React Router uses no `basename`.
+- PWA manifest `start_url` is `"/"` and `scope` is `"/"`.
+- Do not add `/sitebrief` prefixes anywhere in routes, assets, or manifests.
+
+### Cloudflare Pages Project Setup
+1. Create a **dedicated SiteBrief Pages project** in the Cloudflare dashboard.
+2. Connect only the **SiteBrief GitHub repository** — do not connect the scope-guard.com repository.
+3. Complete one successful `*.pages.dev` deployment and verify the build.
+4. In **Pages → Custom domains**, add `sitebrief.scope-guard.com`.
+5. If scope-guard.com DNS is already managed by Cloudflare, let Pages create the CNAME automatically.
+6. If DNS is managed elsewhere, create the required CNAME **only after** associating the custom domain in the Pages dashboard — do not add DNS records before Pages confirms the domain.
+
+### SPA Routing
+- `public/_redirects` must contain: `/* /index.html 200`
+- Direct browser navigation to `/projects`, `/projects/:id`, `/reports/:id`, `/settings`, `/billing` must serve the app shell.
+- Do NOT add a top-level `404.html` unless a complete custom redirect table replaces the fallback.
+- `public/_headers` provides security headers (Content-Security-Policy, X-Frame-Options, etc.).
+
+### Edge Function CORS
+Authenticated and billing Edge Functions must restrict `Access-Control-Allow-Origin` to:
+```
+https://sitebrief.scope-guard.com
+```
+And explicitly for local development:
+```
+http://localhost:5173
+```
+Do NOT use `Access-Control-Allow-Origin: *` for authenticated or billing functions.
 
 ---
 

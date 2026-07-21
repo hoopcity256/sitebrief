@@ -39,7 +39,7 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 - [ ] Error handling and empty states
 - [ ] Static pages (privacy, terms, etc.)
 - [ ] Add `public/_redirects` and `public/_headers` (CSP) for Cloudflare Pages
-- [ ] Production deployment to Cloudflare Pages with custom domain
+- [ ] Production deployment to Cloudflare Pages: create dedicated SiteBrief Pages project, connect SiteBrief GitHub repo, verify `*.pages.dev` build, add custom domain `sitebrief.scope-guard.com`
 
 ## Day 7 — Launch
 - [ ] Final full acceptance test pass
@@ -56,10 +56,10 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 | H1 | Create or verify Stripe account | Human | ⬜ Not started |
 | H2 | Complete Stripe business verification (required before live payments) | Human | ⬜ Not started |
 | H3 | Create Supabase project and note project URL + anon key | Human | ⬜ Not started |
-| H4 | Choose and acquire production domain name | Human | ⬜ Not started |
+| H4 | Production domain confirmed: `sitebrief.scope-guard.com` | Human | ✅ Confirmed |
 | H5 | Create monthly ($9.99) and annual ($79.99) Stripe prices with 14-day trials | Human | ⬜ Not started |
 | H6 | Configure Stripe Customer Portal (allowed cancellation, plan switching) | Human | ⬜ Not started |
-| H7 | Configure Stripe webhook endpoint after first deployment (add endpoint URL, copy signing secret) | Human | ⬜ Not started |
-| H8 | Add production environment variables and Supabase Edge Function secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_MONTHLY_PRICE_ID, STRIPE_ANNUAL_PRICE_ID) | Human | ⬜ Not started |
+| H7 | After first `*.pages.dev` deploy: add webhook endpoint `https://sitebrief.scope-guard.com/functions/v1/stripe-webhook` in Stripe dashboard; copy signing secret to Edge Function secrets | Human | ⬜ Not started |
+| H8 | Set Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID` | Human | ⬜ Not started |
 | H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
-| H10 | Create Cloudflare Pages project and connect to Git repository | Human | ⬜ Not started |
+| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add env vars `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
