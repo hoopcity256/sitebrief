@@ -11,8 +11,19 @@ Format: `[x]` done · `[/]` in progress · `[ ]` not started · `[!]` blocked
 - [x] Draft Supabase schema migrations `20260721000000_initial.sql` (do not run)
 - [x] Supabase CLI initialised (`supabase/config.toml`, `supabase/.gitignore` committed)
 - [x] Migration `20260721000000_initial.sql` applied to `sitebrief-test` (toitahshmkxazxqqopzg) — zero SQL errors, zero lint findings
-- [!] Migration `20260721000000_initial.sql` **pending on production** (`sitebrief`, qbycpzfyugrsbckrpyak) — awaiting human owner authorization
-- [!] RLS and Storage functional acceptance tests (T-SEC, T-STOR, T-PATH) **pending** — require production migration to be applied first
+- [!] RLS and Storage functional acceptance tests (T-SEC, T-STOR, T-PATH) **pending** — must run against `sitebrief-test`; production migration is prohibited until all pass
+- [!] Migration `20260721000000_initial.sql` **pending on production** (`sitebrief`, qbycpzfyugrsbckrpyak) — **locked** until acceptance tests below pass
+
+### Production Migration Gate
+
+Production migration may be authorized only after:
+
+- [ ] 1. Two-user RLS isolation tests pass (T-SEC-1 – T-SEC-4)
+- [ ] 2. Subscription entitlement and expired-access tests pass (T-SEC-5, T-STRIPE-7 – T-STRIPE-9)
+- [ ] 3. `create_report` atomic numbering tests pass (T-SEC-6, T-SEC-8)
+- [ ] 4. Report and photo immutable-identity tests pass (T-SEC-7, T-SEC-9, T-SEC-11)
+- [ ] 5. Canonical Storage-path and orphan-object tests pass (T-PATH-1 – T-PATH-4, T-STOR-11, T-STOR-12)
+- [ ] 6. Actual Storage API upload/read/update/delete tests pass (T-STOR-1 – T-STOR-10, T-STOR-13)
 - [ ] Configure Supabase allowed redirect URLs
 - [ ] Implement Supabase Auth (email/password, confirmation, reset)
 - [ ] Deploy staging URL to Cloudflare Pages
