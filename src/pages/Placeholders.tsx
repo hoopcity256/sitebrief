@@ -1,6 +1,4 @@
 
-export const ProjectsPage = () => <div>ProjectsPage</div>
-export const ProjectDetailPage = () => <div>ProjectDetailPage</div>
 export const CreateReportPage = () => <div>CreateReportPage</div>
 export const ReportPreviewPage = () => <div>ReportPreviewPage</div>
 export const SettingsPage = () => <div>SettingsPage</div>

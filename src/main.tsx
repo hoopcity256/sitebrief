@@ -8,9 +8,9 @@ import SignUpPage from './pages/SignUpPage'
 import PasswordResetPage from './pages/PasswordResetPage'
 import UpdatePasswordPage from './pages/UpdatePasswordPage'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { ProjectsPage } from './pages/ProjectsPage'
+import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import {
-  ProjectsPage,
-  ProjectDetailPage,
   CreateReportPage,
   ReportPreviewPage,
   SettingsPage,
