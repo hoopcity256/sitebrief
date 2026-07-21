@@ -10,8 +10,8 @@ import UpdatePasswordPage from './pages/UpdatePasswordPage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
+import { CreateReportPage } from './pages/CreateReportPage'
 import {
-  CreateReportPage,
   ReportPreviewPage,
   SettingsPage,
   BillingSuccessPage,
