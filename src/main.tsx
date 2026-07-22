@@ -11,8 +11,8 @@ import { OnboardingPage } from './pages/OnboardingPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { CreateReportPage } from './pages/CreateReportPage'
+import { ReportPreviewPage } from './pages/ReportPreviewPage'
 import {
-  ReportPreviewPage,
   SettingsPage,
   BillingSuccessPage,
   BillingCancelPage

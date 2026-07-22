@@ -53,3 +53,13 @@ export async function updateReport(
   if (!data) throw new Error('Report not found or not authorized')
   return { updated_at: data.updated_at }
 }
+
+export async function listPhotosForReport(reportId: string) {
+  const { data, error } = await supabase
+    .from('report_photos')
+    .select('id, storage_path, display_order')
+    .eq('report_id', reportId)
+    .order('display_order', { ascending: true })
+  if (error) throw error
+  return data ?? []
+}
