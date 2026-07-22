@@ -29,11 +29,17 @@ Production migration may be authorized only after:
 - [ ] Deploy staging URL to Cloudflare Pages
 
 ## Day 3 — Core App
-- [ ] Onboarding flow (company profile to Supabase)
-- [ ] Project CRUD (create, list, archive)
-- [ ] Report editor (text fields)
-- [ ] Browser photo selection, compression pipeline, Supabase Storage upload
-- [ ] IndexedDB draft recovery
+- [x] T3.1 — Generate TypeScript database types from `sitebrief-test` (`6562c1a`)
+- [x] T3.2 — Typed Supabase client and publishable key rename (`45e0d31`)
+- [x] T3.3 — Onboarding flow: company profile persistence and AuthGuard gate (`78e316f`)
+- [x] Auth UI fix: connection diagnosis, styled auth pages, error sanitization (`d928e62`)
+- [x] HA-3 — Test subscription row inserted (trialing, 14-day trial)
+- [x] T3.4 — Projects CRUD: list, create, archive, detail with zero-row detection (`76319a0`)
+- [x] T3.5 — Report creation via `create_report()` RPC, draft editor, report list (`2b17746`)
+- [x] T3.6 — Multi-layer autosave: Supabase debounced + IndexedDB recovery (`1845323`)
+- [x] T3.7 — Photo pipeline: iterative JPEG compression, upload, delete with consistency (`6d14ff1`)
+- [x] T3.8 — Vitest suite: 27 tests across 7 files — all passing (`dab50cf`)
+- [x] T3.9 — TASKS.md Day 3 status update
 
 ## Day 4 — PDF
 - [ ] Client-side PDF with `@react-pdf/renderer`
