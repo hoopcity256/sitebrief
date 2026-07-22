@@ -39,7 +39,8 @@ Production migration may be authorized only after:
 - [x] T3.6 — Multi-layer autosave: Supabase debounced + IndexedDB recovery (`1845323`)
 - [x] T3.7 — Photo pipeline: iterative JPEG compression, upload, delete with consistency (`6d14ff1`)
 - [x] T3.8 — Vitest suite: 27 tests across 7 files — all passing (`dab50cf`)
-- [x] T3.9 — TASKS.md Day 3 status update
+- [x] T3.9 — Added ReportPreviewPage (`53755c4`)
+- [x] T3.10 — TASKS.md Day 3 status update
 
 ## Day 4 — PDF
 - [ ] Client-side PDF with `@react-pdf/renderer`
