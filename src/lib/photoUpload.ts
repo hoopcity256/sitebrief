@@ -38,12 +38,14 @@ export async function uploadPhoto(
 
   if (storageError) {
     // Storage upload failed — attempt metadata cleanup
-    const { error: cleanupError } = await supabase
+    const { data: cleanupData, error: cleanupError } = await supabase
       .from('report_photos')
       .delete()
       .eq('id', photoId)
+      .select('id')
+      .single()
 
-    if (cleanupError) {
+    if (cleanupError || !cleanupData) {
       throw new Error(
         'Photo upload failed and metadata cleanup also failed. ' +
         'An orphaned metadata row may exist. Please retry or contact support.'

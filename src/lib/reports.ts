@@ -2,7 +2,6 @@ import { supabase } from './supabase'
 import type { Database } from './database.types'
 
 type ReportRow = Database['public']['Tables']['reports']['Row']
-type ReportUpdate = Database['public']['Tables']['reports']['Update']
 
 /** Must be called instead of direct INSERT — one-shot from button click */
 export async function createReport(projectId: string) {
@@ -36,16 +35,26 @@ export async function listReportsForProject(projectId: string) {
 
 /**
  * Saves draft content and returns the server-acknowledged updated_at.
- * The caller uses this to compare against the local draft revision
- * for stale-save protection.
+ * Constructs the update payload explicitly — never spreads the input
+ * so that unexpected fields like id, user_id, project_id, report_number
+ * are never sent to the database.
  */
 export async function updateReport(
   reportId: string,
-  patch: Pick<ReportUpdate, 'work_completed' | 'problems' | 'next_steps' | 'is_draft'>
+  patch: { work_completed?: string; problems?: string; next_steps?: string; is_draft?: boolean }
 ): Promise<{ updated_at: string }> {
+  type ReportUpdate = Database['public']['Tables']['reports']['Update']
+  const updateObj: ReportUpdate = {
+    updated_at: new Date().toISOString(),
+  }
+  if (patch.work_completed !== undefined) updateObj.work_completed = patch.work_completed
+  if (patch.problems !== undefined) updateObj.problems = patch.problems
+  if (patch.next_steps !== undefined) updateObj.next_steps = patch.next_steps
+  if (patch.is_draft !== undefined) updateObj.is_draft = patch.is_draft
+
   const { data, error } = await supabase
     .from('reports')
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update(updateObj)
     .eq('id', reportId)
     .select('updated_at')
     .single()
