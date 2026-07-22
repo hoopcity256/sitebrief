@@ -97,16 +97,17 @@ describe('reports', () => {
     vi.mocked(supabase.from).mockReturnValue({ update: updateMock } as any)
 
     // @ts-expect-error - simulating someone passing invalid keys if TypeScript wasn't strict
-    await updateReport('report-1', { id: 'new-id', work_completed: 'test' } as any)
+    await updateReport('report-1', { work_completed: 'test', id: 'hack', user_id: 'hack', project_id: 'hack', report_number: 99 } as any)
     
-    // The implementation uses { ...patch, updated_at } so if bad keys were in patch they would pass through.
-    // Wait, the prompt says "updateReport does not attempt to change id...".
-    // Let's verify that the type definition in reports.ts enforces this.
-    // We can't really test type errors at runtime in this simple test unless the function explicitly filters keys,
-    // but we can just test normal usage and ensure it only passes allowed keys.
+    expect(updateMock).toHaveBeenCalledWith({
+      work_completed: 'test',
+      updated_at: '2026-07-21T12:00:00.000Z'
+    })
     expect(updateMock).toHaveBeenCalledWith(expect.not.objectContaining({
+      id: expect.anything(),
       user_id: expect.anything(),
-      project_id: expect.anything()
+      project_id: expect.anything(),
+      report_number: expect.anything()
     }))
   })
 })

@@ -60,7 +60,10 @@ describe('photoUpload', () => {
     const insertMock = vi.fn().mockResolvedValue({ error: null })
     const uploadMock = vi.fn().mockResolvedValue({ error: new Error('Upload error') })
     
-    const deleteMock = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
+    const singleMock = vi.fn().mockResolvedValue({ error: null, data: { id: 'mock-uuid-123' } })
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock })
+    const eqMock = vi.fn().mockReturnValue({ select: selectMock })
+    const deleteMock = vi.fn().mockReturnValue({ eq: eqMock })
     
     vi.mocked(supabase.from).mockImplementation((table) => {
       if (table === 'report_photos') {
@@ -80,7 +83,9 @@ describe('photoUpload', () => {
     const insertMock = vi.fn().mockResolvedValue({ error: null })
     const uploadMock = vi.fn().mockResolvedValue({ error: new Error('Upload error') })
     
-    const eqMock = vi.fn().mockResolvedValue({ error: new Error('Delete error') })
+    const singleMock = vi.fn().mockResolvedValue({ error: null, data: null })
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock })
+    const eqMock = vi.fn().mockReturnValue({ select: selectMock })
     const deleteMock = vi.fn().mockReturnValue({ eq: eqMock })
     
     vi.mocked(supabase.from).mockImplementation((table) => {

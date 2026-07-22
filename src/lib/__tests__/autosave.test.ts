@@ -1,52 +1,49 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { updateReport } from '../reports'
-import { clearDraft } from '../draftRecovery'
+import { supabase } from '../supabase'
 
-vi.mock('../reports', () => ({
-  updateReport: vi.fn(),
+vi.mock('../supabase', () => ({
+  supabase: {
+    from: vi.fn(),
+  }
 }))
 
-vi.mock('../draftRecovery', () => ({
-  clearDraft: vi.fn(),
-  saveDraft: vi.fn(),
-  loadDraft: vi.fn(),
-}))
-
-describe('autosave control flow', () => {
+describe('updateReport field construction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-21T12:00:00.000Z'))
   })
 
-  // Simulated flushSave function mimicking CreateReportPage.tsx
-  async function simulateFlushSave(
-    capturedRevision: number,
-    currentRevision: number
-  ) {
-    // In actual implementation:
-    // const result = await updateReport(reportId, patch)
-    // if (capturedRevision === revisionRef.current) { clearDraft(...) }
-    
-    // We mock the success of updateReport
-    vi.mocked(updateReport).mockResolvedValueOnce({ updated_at: '2026-07-21T12:00:00.000Z' })
-    
-    await updateReport('report-1', { work_completed: 'test', is_draft: true })
-    
-    if (capturedRevision === currentRevision) {
-      await clearDraft('report-1')
-    }
-  }
+  it('updateReport only includes explicitly provided fields', async () => {
+    const singleMock = vi.fn().mockResolvedValue({ data: { updated_at: '2026-07-21T12:00:00.000Z' }, error: null })
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock })
+    const eqMock = vi.fn().mockReturnValue({ select: selectMock })
+    const updateMock = vi.fn().mockReturnValue({ eq: eqMock })
+    vi.mocked(supabase.from).mockReturnValue({ update: updateMock } as any)
 
-  it('A stale server response (captured revision < current local revision) does not call clearDraft', async () => {
-    await simulateFlushSave(1, 2)
-    
-    expect(updateReport).toHaveBeenCalled()
-    expect(clearDraft).not.toHaveBeenCalled()
+    await updateReport('report-1', { work_completed: 'test', problems: 'none' })
+
+    expect(updateMock).toHaveBeenCalledWith({
+      work_completed: 'test',
+      problems: 'none',
+      updated_at: '2026-07-21T12:00:00.000Z'
+    })
   })
 
-  it('A current server response (captured revision === current local revision) does call clearDraft', async () => {
-    await simulateFlushSave(2, 2)
-    
-    expect(updateReport).toHaveBeenCalled()
-    expect(clearDraft).toHaveBeenCalledWith('report-1')
+  it('updateReport drops unexpected fields like id or user_id', async () => {
+    const singleMock = vi.fn().mockResolvedValue({ data: { updated_at: '2026-07-21T12:00:00.000Z' }, error: null })
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock })
+    const eqMock = vi.fn().mockReturnValue({ select: selectMock })
+    const updateMock = vi.fn().mockReturnValue({ eq: eqMock })
+    vi.mocked(supabase.from).mockReturnValue({ update: updateMock } as any)
+
+    // @ts-expect-error - simulating bad data
+    await updateReport('report-1', { work_completed: 'test', id: 'hack', user_id: 'hack' })
+
+    expect(updateMock).toHaveBeenCalledWith({
+      work_completed: 'test',
+      updated_at: '2026-07-21T12:00:00.000Z'
+    })
   })
 })
