@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { getReport, updateReport } from '../lib/reports'
+import { getReport, updateReport, listPhotosForReport } from '../lib/reports'
 import { saveDraft, loadDraft, clearDraft } from '../lib/draftRecovery'
 import { uploadPhoto } from '../lib/photoUpload'
 import { deletePhoto } from '../lib/photoDelete'
+import { supabase } from '../lib/supabase'
 
 export const CreateReportPage = () => {
   const { projectId } = useParams<{ projectId: string }>()
@@ -18,6 +19,7 @@ export const CreateReportPage = () => {
     storagePath: string
     thumbnailUrl: string
     uploading?: boolean
+    deleting?: boolean
     error?: string
   }
   const [photos, setPhotos] = useState<PhotoSlot[]>([])
@@ -35,6 +37,9 @@ export const CreateReportPage = () => {
   const [lastSaved, setLastSaved] = useState<string | null>(null)
   const [recoveryBanner, setRecoveryBanner] = useState(false)
   const recoveredDraftRef = useRef<{ work_completed: string; problems: string; next_steps: string } | null>(null)
+
+  const fieldsRef = useRef({ workCompleted: '', problems: '', nextSteps: '' })
+  const nextOrderRef = useRef(0)
 
   // Revision counter for stale-save protection
   const revisionRef = useRef(0)
@@ -62,6 +67,28 @@ export const CreateReportPage = () => {
       setWorkCompleted(report.work_completed ?? '')
       setProblems(report.problems ?? '')
       setNextSteps(report.next_steps ?? '')
+      fieldsRef.current = {
+        workCompleted: report.work_completed ?? '',
+        problems: report.problems ?? '',
+        nextSteps: report.next_steps ?? ''
+      }
+
+      const existingPhotos = await listPhotosForReport(reportId)
+      const hydratedPhotos: PhotoSlot[] = []
+      for (const p of existingPhotos) {
+        const { data } = await supabase.storage
+          .from('report-photos')
+          .createSignedUrl(p.storage_path, 3600)
+        const url = data?.signedUrl ?? ''
+        if (url) photoUrlsRef.current.add(url)
+        hydratedPhotos.push({
+          photoId: p.id,
+          storagePath: p.storage_path,
+          thumbnailUrl: url,
+        })
+      }
+      setPhotos(hydratedPhotos)
+      nextOrderRef.current = existingPhotos.length
 
       // Check IndexedDB for a recovered draft
       try {
@@ -96,6 +123,7 @@ export const CreateReportPage = () => {
     if (!reportId) return
     if (idbTimerRef.current) clearTimeout(idbTimerRef.current)
     idbTimerRef.current = setTimeout(() => {
+      const { workCompleted, problems, nextSteps } = fieldsRef.current
       saveDraft(reportId, {
         work_completed: workCompleted,
         problems,
@@ -104,13 +132,15 @@ export const CreateReportPage = () => {
         savedAt: Date.now(),
       }).catch(() => { /* IndexedDB save is best-effort */ })
     }, 500)
-  }, [reportId, workCompleted, problems, nextSteps])
+  }, [reportId])
 
   const flushSave = useCallback(async () => {
     if (!reportId || !dirtyRef.current) return
     const capturedRevision = revisionRef.current
     dirtyRef.current = false
     setSaving(true)
+
+    const { workCompleted, problems, nextSteps } = fieldsRef.current
 
     // Immediate IDB save
     try {
@@ -139,7 +169,7 @@ export const CreateReportPage = () => {
     } finally {
       setSaving(false)
     }
-  }, [reportId, workCompleted, problems, nextSteps])
+  }, [reportId])
 
   const scheduleSave = useCallback(() => {
     dirtyRef.current = true
@@ -178,6 +208,11 @@ export const CreateReportPage = () => {
       setWorkCompleted(recoveredDraftRef.current.work_completed)
       setProblems(recoveredDraftRef.current.problems)
       setNextSteps(recoveredDraftRef.current.next_steps)
+      fieldsRef.current = {
+        workCompleted: recoveredDraftRef.current.work_completed,
+        problems: recoveredDraftRef.current.problems,
+        nextSteps: recoveredDraftRef.current.next_steps
+      }
       recoveredDraftRef.current = null
     }
     setRecoveryBanner(false)
@@ -193,13 +228,17 @@ export const CreateReportPage = () => {
 
   const handlePhotoSelect = async (files: FileList | null) => {
     if (!files || files.length === 0 || !user || !reportId) return
+    if (photos.length >= 10) return
     const file = files[0]
     const tempId = crypto.randomUUID()
     const tempSlot: PhotoSlot = { photoId: tempId, storagePath: '', thumbnailUrl: '', uploading: true }
     setPhotos(prev => [...prev, tempSlot])
 
+    const order = nextOrderRef.current
+    nextOrderRef.current += 1
+
     try {
-      const result = await uploadPhoto(file, user.id, reportId, photos.length)
+      const result = await uploadPhoto(file, user.id, reportId, order)
       const thumbUrl = URL.createObjectURL(result.thumbnailBlob)
       photoUrlsRef.current.add(thumbUrl)
       setPhotos(prev => prev.map(p =>
@@ -219,21 +258,29 @@ export const CreateReportPage = () => {
 
   const handleDeletePhoto = async (index: number) => {
     const photo = photos[index]
-    if (!photo || photo.uploading) return
-    // Revoke thumbnail URL
-    if (photo.thumbnailUrl) {
-      URL.revokeObjectURL(photo.thumbnailUrl)
-      photoUrlsRef.current.delete(photo.thumbnailUrl)
-    }
-    // Remove from local state immediately for responsiveness
-    setPhotos(prev => prev.filter((_, i) => i !== index))
-    // Delete from backend if it was successfully uploaded
-    if (photo.storagePath) {
-      try {
-        await deletePhoto(photo.photoId, photo.storagePath)
-      } catch {
-        // Best-effort — photo slot already removed from UI
+    if (!photo || photo.uploading || photo.deleting) return
+
+    if (!photo.storagePath) {
+      // Failed upload or error slot - remove immediately
+      if (photo.thumbnailUrl) {
+        URL.revokeObjectURL(photo.thumbnailUrl)
+        photoUrlsRef.current.delete(photo.thumbnailUrl)
       }
+      setPhotos(prev => prev.filter((_, i) => i !== index))
+      return
+    }
+
+    setPhotos(prev => prev.map((p, i) => i === index ? { ...p, deleting: true } : p))
+
+    try {
+      await deletePhoto(photo.photoId, photo.storagePath)
+      if (photo.thumbnailUrl) {
+        URL.revokeObjectURL(photo.thumbnailUrl)
+        photoUrlsRef.current.delete(photo.thumbnailUrl)
+      }
+      setPhotos(prev => prev.filter((_, i) => i !== index))
+    } catch {
+      setPhotos(prev => prev.map((p, i) => i === index ? { ...p, deleting: false, error: 'Could not delete photo.' } : p))
     }
   }
 
@@ -249,6 +296,7 @@ export const CreateReportPage = () => {
     if (!reportId || finishing) return
     setFinishing(true)
     try {
+      const { workCompleted, problems, nextSteps } = fieldsRef.current
       // Flush latest draft
       await updateReport(reportId, {
         work_completed: workCompleted,
@@ -325,7 +373,7 @@ export const CreateReportPage = () => {
           <textarea
             id="report-work-completed"
             value={workCompleted}
-            onChange={(e) => { setWorkCompleted(e.target.value); scheduleSave() }}
+            onChange={(e) => { setWorkCompleted(e.target.value); fieldsRef.current.workCompleted = e.target.value; scheduleSave() }}
             onBlur={() => flushSave()}
             placeholder="Describe work completed today…"
             style={styles.textarea}
@@ -338,7 +386,7 @@ export const CreateReportPage = () => {
           <textarea
             id="report-problems"
             value={problems}
-            onChange={(e) => { setProblems(e.target.value); scheduleSave() }}
+            onChange={(e) => { setProblems(e.target.value); fieldsRef.current.problems = e.target.value; scheduleSave() }}
             onBlur={() => flushSave()}
             placeholder="Any issues or blockers…"
             style={styles.textarea}
@@ -351,7 +399,7 @@ export const CreateReportPage = () => {
           <textarea
             id="report-next-steps"
             value={nextSteps}
-            onChange={(e) => { setNextSteps(e.target.value); scheduleSave() }}
+            onChange={(e) => { setNextSteps(e.target.value); fieldsRef.current.nextSteps = e.target.value; scheduleSave() }}
             onBlur={() => flushSave()}
             placeholder="What happens next…"
             style={styles.textarea}
@@ -374,7 +422,8 @@ export const CreateReportPage = () => {
                 )}
                 <button
                   onClick={() => handleDeletePhoto(i)}
-                  style={styles.photoDeleteBtn}
+                  disabled={p.deleting}
+                  style={{...styles.photoDeleteBtn, opacity: p.deleting ? 0.5 : 1}}
                   aria-label={`Delete photo ${i + 1}`}
                 >
                   ✕
