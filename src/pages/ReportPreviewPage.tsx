@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getReport, listPhotosForReport } from '../lib/reports'
+import { getProject } from '../lib/projects'
+import { getCompanyProfile } from '../lib/companyProfile'
+import { canShareFiles, shareBlob, downloadBlob } from '../lib/share'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { AppShell } from '../components/AppShell'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -41,46 +45,145 @@ const IconEdit = () => (
   </svg>
 )
 
+const IconDownload = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18" aria-hidden="true">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+)
+
+const IconShare = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18" aria-hidden="true">
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+  </svg>
+)
+
 // ── ReportPreviewPage ──────────────────────────────────────────────────────
 
 export const ReportPreviewPage = () => {
   const { reportId } = useParams<{ reportId: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
+
   const [report, setReport] = useState<ReportData | null>(null)
   const [photos, setPhotos] = useState<PhotoData[]>([])
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({})
+  const [projectName, setProjectName] = useState('')
+  const [customerName, setCustomerName] = useState<string | null>(null)
+  const [address, setAddress] = useState<string | null>(null)
+  const [companyName, setCompanyName] = useState('SiteBrief')
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // PDF / share state
+  const [pdfState, setPdfState] = useState<'idle' | 'generating' | 'error'>('idle')
+  const [pdfError, setPdfError] = useState<string | null>(null)
 
   const loadReport = useCallback(async () => {
     if (!reportId) return
     setLoading(true)
     setError(null)
     try {
-      const r = await getReport(reportId)
-      setReport(r as ReportData)
-      const p = await listPhotosForReport(reportId)
-      setPhotos(p)
+      // Load report, project, and company profile in parallel
+      const r = await getReport(reportId) as ReportData
+      setReport(r)
 
-      // Load signed URLs for photos
+      const [proj, photoList, company] = await Promise.all([
+        getProject(r.project_id),
+        listPhotosForReport(reportId),
+        user ? getCompanyProfile(user.id) : Promise.resolve(null),
+      ])
+
+      setProjectName(proj.name)
+      setCustomerName(proj.customer_name ?? null)
+      setAddress(proj.address ?? null)
+      if (company?.company_name) setCompanyName(company.company_name)
+
+      setPhotos(photoList)
+
+      // Load signed URLs for all photos
       const urls: Record<string, string> = {}
-      for (const photo of p) {
-        const { data } = await supabase.storage
-          .from('report-photos')
-          .createSignedUrl(photo.storage_path, 3600)
-        if (data?.signedUrl) {
-          urls[photo.id] = data.signedUrl
-        }
-      }
+      await Promise.all(
+        photoList.map(async (photo) => {
+          const { data } = await supabase.storage
+            .from('report-photos')
+            .createSignedUrl(photo.storage_path, 3600)
+          if (data?.signedUrl) urls[photo.id] = data.signedUrl
+        })
+      )
       setPhotoUrls(urls)
     } catch {
       setError('Could not load report.')
     } finally {
       setLoading(false)
     }
-  }, [reportId])
+  }, [reportId, user])
 
   useEffect(() => { loadReport() }, [loadReport])
+
+  // ── PDF generation + share/download ─────────────────────────────────────
+
+  const handlePdfAction = async (mode: 'share' | 'download') => {
+    if (!report || pdfState === 'generating') return
+    setPdfState('generating')
+    setPdfError(null)
+
+    try {
+      // Dynamic import — defers the ~1.5 MB @react-pdf/renderer bundle
+      // until the user actually requests a PDF.
+      const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
+
+      const pdfData = {
+        reportNumber: report.report_number,
+        isDraft: report.is_draft,
+        createdAt: report.created_at,
+        companyName,
+        projectName,
+        customerName,
+        address,
+        workCompleted: report.work_completed,
+        problems: report.problems,
+        nextSteps: report.next_steps,
+        photoUrls: photos
+          .sort((a, b) => a.display_order - b.display_order)
+          .map(p => photoUrls[p.id])
+          .filter(Boolean),
+      }
+
+      const blob = await generateReportPdfBlob(pdfData)
+      const filename = reportPdfFilename({
+        companyName,
+        reportNumber: report.report_number,
+        createdAt: report.created_at,
+      })
+
+      if (mode === 'share' && canShareFiles()) {
+        await shareBlob(blob, filename, `Report #${report.report_number} — ${projectName}`)
+      } else {
+        downloadBlob(blob, filename)
+      }
+
+      setPdfState('idle')
+    } catch (e: unknown) {
+      // User cancelling the share sheet is not an error
+      if (e instanceof Error && e.name === 'AbortError') {
+        setPdfState('idle')
+        return
+      }
+      setPdfError('Could not generate PDF. Please try again.')
+      setPdfState('idle')
+    }
+  }
+
+  // ── Loading ──────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -111,6 +214,9 @@ export const ReportPreviewPage = () => {
     )
   }
 
+  const isGenerating = pdfState === 'generating'
+  const supportsShare = canShareFiles()
+
   return (
     <AppShell activeTab="projects">
       <div style={styles.page}>
@@ -131,8 +237,8 @@ export const ReportPreviewPage = () => {
         <div style={styles.body}>
           {/* Meta */}
           <div style={styles.meta}>
-            <span>Created {new Date(report.created_at).toLocaleDateString()}</span>
-            <span>Updated {new Date(report.updated_at).toLocaleTimeString()}</span>
+            <span>{projectName}</span>
+            <span>{new Date(report.created_at).toLocaleDateString()}</span>
           </div>
 
           {/* Content sections */}
@@ -144,7 +250,7 @@ export const ReportPreviewPage = () => {
           )}
           {report.problems && (
             <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>Problems</h2>
+              <h2 style={styles.sectionTitle}>Problems / Delays</h2>
               <p style={styles.sectionContent}>{report.problems}</p>
             </div>
           )}
@@ -160,40 +266,82 @@ export const ReportPreviewPage = () => {
             <div style={styles.section}>
               <h2 style={styles.sectionTitle}>Photos ({photos.length})</h2>
               <div style={styles.photoGrid}>
-                {photos.map((p) => (
-                  <div key={p.id} style={styles.photoSlot}>
-                    {photoUrls[p.id] ? (
-                      <img
-                        src={photoUrls[p.id]}
-                        alt={`Photo ${p.display_order + 1}`}
-                        style={styles.photoImg}
-                      />
-                    ) : (
-                      <div style={styles.photoLoading}>
-                        <div style={styles.spinnerSm} />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                {photos
+                  .sort((a, b) => a.display_order - b.display_order)
+                  .map((p) => (
+                    <div key={p.id} style={styles.photoSlot}>
+                      {photoUrls[p.id] ? (
+                        <img
+                          src={photoUrls[p.id]}
+                          alt={`Site photo ${p.display_order + 1}`}
+                          style={styles.photoImg}
+                        />
+                      ) : (
+                        <div style={styles.photoLoading}>
+                          <div style={styles.spinnerSm} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
               </div>
+            </div>
+          )}
+
+          {/* PDF error */}
+          {pdfError && (
+            <div style={styles.pdfError} role="alert">
+              {pdfError}
             </div>
           )}
 
           {/* Actions */}
           <div style={styles.actions}>
+            {/* Edit — always visible */}
             <button
+              id="preview-edit-btn"
               onClick={() => navigate(`/update/${report.project_id}/new?reportId=${report.id}`)}
               style={styles.editBtn}
             >
               <IconEdit />
-              <span>Edit Report</span>
+              <span>Edit</span>
             </button>
-            {/* PDF generation — Day 4 placeholder */}
-            <button style={styles.pdfBtn} disabled aria-disabled="true" title="Coming in Day 4">
-              <span>Generate PDF</span>
-              <span style={styles.comingSoonBadge}>Soon</span>
-            </button>
+
+            {/* Share or Download — adaptive */}
+            {supportsShare ? (
+              <button
+                id="preview-share-btn"
+                onClick={() => handlePdfAction('share')}
+                disabled={isGenerating}
+                style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
+              >
+                {isGenerating ? (
+                  <><div style={styles.spinnerBtn} /><span>Generating…</span></>
+                ) : (
+                  <><IconShare /><span>Share PDF</span></>
+                )}
+              </button>
+            ) : (
+              <button
+                id="preview-download-btn"
+                onClick={() => handlePdfAction('download')}
+                disabled={isGenerating}
+                style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
+              >
+                {isGenerating ? (
+                  <><div style={styles.spinnerBtn} /><span>Generating…</span></>
+                ) : (
+                  <><IconDownload /><span>Download PDF</span></>
+                )}
+              </button>
+            )}
           </div>
+
+          {/* Generating progress note */}
+          {isGenerating && (
+            <p style={styles.generatingNote} role="status" aria-live="polite">
+              Building your PDF — this may take a moment if there are photos.
+            </p>
+          )}
         </div>
       </div>
     </AppShell>
@@ -223,6 +371,13 @@ const styles: Record<string, React.CSSProperties> = {
     border: '2px solid var(--color-border)',
     borderTopColor: 'var(--color-primary)',
     borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+  },
+  spinnerBtn: {
+    width: '16px', height: '16px',
+    border: '2px solid rgba(255,255,255,0.4)',
+    borderTopColor: '#fff',
+    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+    flexShrink: 0,
   },
   loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
   errorText: { color: 'var(--color-danger)', fontSize: '15px', margin: 0, textAlign: 'center' },
@@ -309,25 +464,32 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%', height: '100%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
+  pdfError: {
+    padding: '12px 14px',
+    background: 'var(--color-danger-soft)',
+    border: '1px solid var(--color-danger)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--color-danger)',
+    fontSize: '14px',
+  },
   actions: { display: 'flex', gap: '10px', marginTop: '4px' },
   editBtn: {
-    flex: 1, minHeight: '48px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-md)',
-    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+    flex: '0 0 auto', minWidth: '96px', minHeight: '48px',
+    background: 'var(--color-surface)', color: 'var(--color-primary)',
+    border: '1px solid var(--color-primary)', borderRadius: 'var(--radius-md)',
+    fontSize: '15px', fontWeight: 600, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
   },
   pdfBtn: {
     flex: 1, minHeight: '48px',
-    background: 'var(--color-background)', color: 'var(--color-text-muted)',
-    border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
-    fontSize: '15px', fontWeight: 500, cursor: 'default',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-    opacity: 0.7,
+    background: 'var(--color-primary)', color: '#fff',
+    border: 'none', borderRadius: 'var(--radius-md)',
+    fontSize: '15px', fontWeight: 600, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+    transition: 'opacity 0.15s',
   },
-  comingSoonBadge: {
-    fontSize: '10px', fontWeight: 700,
-    color: 'var(--color-warning)', background: 'var(--color-warning-soft)',
-    padding: '2px 7px', borderRadius: '10px',
+  generatingNote: {
+    fontSize: '12px', color: 'var(--color-text-muted)',
+    textAlign: 'center', margin: 0,
   },
 }
