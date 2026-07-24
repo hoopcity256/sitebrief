@@ -40,7 +40,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
     paddingLeft: 'max(16px, env(safe-area-inset-left))',
     boxSizing: 'border-box',
-    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    fontFamily: 'var(--font-sans)',
   },
   card: {
     backgroundColor: '#FFFFFF',

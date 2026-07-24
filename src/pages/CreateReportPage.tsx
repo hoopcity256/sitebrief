@@ -36,6 +36,7 @@ export const CreateReportPage = () => {
   const [finishing, setFinishing] = useState(false)
   const [lastSaved, setLastSaved] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [finishError, setFinishError] = useState<string | null>(null)
   const [recoveryBanner, setRecoveryBanner] = useState(false)
   const recoveredDraftRef = useRef<{ work_completed: string; problems: string; next_steps: string } | null>(null)
 
@@ -299,20 +300,23 @@ export const CreateReportPage = () => {
   const handleDone = async () => {
     if (!reportId || finishing) return
     setFinishing(true)
+    setFinishError(null)
     try {
       const { workCompleted, problems, nextSteps } = fieldsRef.current
-      // Flush latest draft
+      // Flush latest snapshot and mark final in a single server call
       await updateReport(reportId, {
         work_completed: workCompleted,
         problems,
         next_steps: nextSteps,
         is_draft: false,
       })
-      // Clear IndexedDB draft on successful finalization
+      // Clear IndexedDB draft on confirmed finalization
       await clearDraft(reportId).catch(() => {})
+      // Navigate to preview only after server confirmation
       navigate(`/preview/${reportId}`)
     } catch {
-      setError('Could not finalize report. Please try again.')
+      // Keep editor intact — show inline error, not a page replacement
+      setFinishError('Could not finalize report. Check your connection and try again.')
     } finally {
       setFinishing(false)
     }
@@ -413,7 +417,7 @@ export const CreateReportPage = () => {
 
         {/* Photo section */}
         <div style={styles.photoSection}>
-          <h3 style={styles.photoHeading}>📷 Photos ({photos.length}/10)</h3>
+          <h3 style={styles.photoHeading}>Photos ({photos.length}/10)</h3>
           <div style={styles.photoGrid}>
             {photos.map((p, i) => (
               <div key={p.photoId} style={styles.photoSlot}>
@@ -439,7 +443,6 @@ export const CreateReportPage = () => {
                 <input
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   onChange={(e) => handlePhotoSelect(e.target.files)}
                   style={{ display: 'none' }}
                 />
@@ -450,13 +453,23 @@ export const CreateReportPage = () => {
           </div>
         </div>
 
+        {/* Finalization error — shown in editor, never replaces the page */}
+        {finishError && (
+          <div style={styles.finishError} role="alert">
+            {finishError}
+            <button onClick={handleDone} disabled={finishing} style={styles.finishRetryBtn}>
+              Retry
+            </button>
+          </div>
+        )}
+
         <button
           id="report-done-btn"
           onClick={handleDone}
           disabled={finishing}
           style={{ ...styles.doneBtn, opacity: finishing ? 0.6 : 1 }}
         >
-          {finishing ? 'Finalizing…' : '✅ Done — Mark as Final'}
+          {finishing ? 'Finalizing…' : 'Done — Mark as Final'}
         </button>
       </div>
     </div>
@@ -464,35 +477,37 @@ export const CreateReportPage = () => {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: { minHeight: '100dvh', background: '#F8F9FA', display: 'flex', flexDirection: 'column' },
+  page: { minHeight: '100dvh', background: 'var(--color-background)', display: 'flex', flexDirection: 'column' },
   center: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', gap: '16px' },
-  spinner: { width: '32px', height: '32px', border: '3px solid #DEE2E6', borderTopColor: '#1A5276', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
-  loadingText: { color: '#6C757D', fontSize: '14px', margin: 0 },
-  errorText: { color: '#DC3545', fontSize: '16px', margin: 0, textAlign: 'center' },
-  retryButton: { minHeight: '48px', padding: '12px 32px', background: '#1A5276', color: '#FFF', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer' },
-  backLink: { background: 'none', border: 'none', color: '#1A5276', fontSize: '14px', cursor: 'pointer', textDecoration: 'underline' },
-  header: { display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', paddingTop: 'max(12px, env(safe-area-inset-top))', background: '#FFFFFF', borderBottom: '1px solid #DEE2E6' },
-  backBtn: { width: '40px', height: '40px', background: 'none', border: '1px solid #DEE2E6', borderRadius: '8px', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  heading: { fontSize: '18px', fontWeight: 700, color: '#1A5276', margin: 0, flex: 1 },
-  saveStatus: { fontSize: '12px', color: '#6C757D', flexShrink: 0 },
-  saveError: { fontSize: '12px', color: '#DC3545', flexShrink: 0, fontWeight: 600 },
-  editorBody: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
-  label: { display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '14px', fontWeight: 600, color: '#495057' },
-  textarea: { padding: '12px', borderRadius: '8px', border: '1px solid #DEE2E6', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical' as const, outline: 'none', minHeight: '96px' },
+  spinner: { width: '28px', height: '28px', border: '2.5px solid var(--color-border)', borderTopColor: 'var(--color-primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
+  loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
+  errorText: { color: 'var(--color-danger)', fontSize: '15px', margin: 0, textAlign: 'center' },
+  retryButton: { minHeight: '48px', padding: '0 32px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', fontSize: '16px', fontWeight: 600, cursor: 'pointer' },
+  backLink: { background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: '14px', cursor: 'pointer', textDecoration: 'underline', padding: 0 },
+  header: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', paddingTop: 'max(12px, env(safe-area-inset-top))', background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' },
+  backBtn: { width: '40px', height: '40px', background: 'none', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--color-text)' },
+  heading: { fontSize: '17px', fontWeight: 700, color: 'var(--color-primary)', margin: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  saveStatus: { fontSize: '12px', color: 'var(--color-text-muted)', flexShrink: 0 },
+  saveError: { fontSize: '12px', color: 'var(--color-danger)', flexShrink: 0, fontWeight: 600 },
+  editorBody: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
+  label: { display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px', fontWeight: 600, color: 'var(--color-text-muted)' },
+  textarea: { padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', fontSize: '16px', fontFamily: 'var(--font-sans)', resize: 'vertical' as const, outline: 'none', minHeight: '96px', background: 'var(--color-surface)', color: 'var(--color-text)' },
   photoSection: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  photoHeading: { fontSize: '14px', fontWeight: 600, color: '#495057', margin: 0 },
+  photoHeading: { fontSize: '13px', fontWeight: 600, color: 'var(--color-text-muted)', margin: 0 },
   photoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px' },
-  photoSlot: { position: 'relative', aspectRatio: '1', borderRadius: '8px', overflow: 'hidden', border: '1px solid #DEE2E6', background: '#FFFFFF' },
+  photoSlot: { position: 'relative', aspectRatio: '1', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--color-border)', background: 'var(--color-surface)' },
   photoThumb: { width: '100%', height: '100%', objectFit: 'cover' },
-  photoUploading: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F1F3F5' },
-  photoError: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFF3F3', color: '#DC3545', fontSize: '11px', padding: '4px', textAlign: 'center' },
-  photoDeleteBtn: { position: 'absolute', top: '2px', right: '2px', width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(0,0,0,0.5)', color: '#FFF', border: 'none', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  photoAddSlot: { aspectRatio: '1', borderRadius: '8px', border: '2px dashed #DEE2E6', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer', background: '#F8F9FA' },
-  photoAddIcon: { fontSize: '24px', color: '#6C757D' },
-  photoAddLabel: { fontSize: '11px', color: '#6C757D' },
-  doneBtn: { minHeight: '48px', background: '#198754', color: '#FFF', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px' },
-  recoveryBanner: { margin: '8px 16px 0', padding: '12px 16px', background: '#FFF8E1', border: '1px solid #FFCA28', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '14px', color: '#795548', gap: '8px' },
+  photoUploading: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-background)' },
+  photoError: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-danger-soft)', color: 'var(--color-danger)', fontSize: '11px', padding: '4px', textAlign: 'center' },
+  photoDeleteBtn: { position: 'absolute', top: '3px', right: '3px', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(0,0,0,0.55)', color: '#fff', border: 'none', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  photoAddSlot: { aspectRatio: '1', borderRadius: 'var(--radius-sm)', border: '2px dashed var(--color-border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer', background: 'var(--color-background)' },
+  photoAddIcon: { fontSize: '22px', color: 'var(--color-text-muted)' },
+  photoAddLabel: { fontSize: '11px', color: 'var(--color-text-muted)' },
+  finishError: { padding: '12px 14px', background: 'var(--color-danger-soft)', border: '1px solid var(--color-danger)', borderRadius: 'var(--radius-sm)', color: 'var(--color-danger)', fontSize: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' },
+  finishRetryBtn: { padding: '6px 14px', background: 'var(--color-danger)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 },
+  doneBtn: { minHeight: '52px', background: 'var(--color-success)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', fontSize: '16px', fontWeight: 600, cursor: 'pointer' },
+  recoveryBanner: { margin: '8px 16px 0', padding: '12px 16px', background: 'var(--color-warning-soft)', border: '1px solid #FCD34D', borderRadius: 'var(--radius-sm)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '14px', color: 'var(--color-warning)', gap: '8px' },
   recoveryActions: { display: 'flex', gap: '8px', flexShrink: 0 },
-  recoveryRestore: { padding: '6px 14px', background: '#1A5276', color: '#FFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
-  recoveryDismiss: { padding: '6px 14px', background: 'none', color: '#6C757D', border: '1px solid #DEE2E6', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' },
+  recoveryRestore: { padding: '6px 14px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
+  recoveryDismiss: { padding: '6px 14px', background: 'none', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '13px', cursor: 'pointer' },
 }

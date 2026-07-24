@@ -17,6 +17,7 @@ import {
   BillingSuccessPage,
   BillingCancelPage
 } from './pages/Placeholders'
+import { MorePage } from './pages/MorePage'
 
 import './index.css'
 
@@ -43,6 +44,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/update/:projectId/new" element={<AuthGuard><CreateReportPage /></AuthGuard>} />
           <Route path="/preview/:reportId" element={<AuthGuard><ReportPreviewPage /></AuthGuard>} />
           <Route path="/settings" element={<AuthGuard><SettingsPage /></AuthGuard>} />
+          <Route path="/more" element={<AuthGuard><MorePage /></AuthGuard>} />
           
           <Route path="/billing/success" element={<BillingSuccessPage />} />
           <Route path="/billing/cancel" element={<BillingCancelPage />} />

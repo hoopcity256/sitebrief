@@ -4,6 +4,35 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useProjects } from '../hooks/useProjects'
 import { createProject, archiveProject } from '../lib/projects'
+import { AppShell } from '../components/AppShell'
+
+// ── SVG icons ──────────────────────────────────────────────────────────────
+
+const IconPlus = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}
+    strokeLinecap="round" strokeLinejoin="round" width="22" height="22" aria-hidden="true">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+)
+
+const IconArchive = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18" aria-hidden="true">
+    <polyline points="21 8 21 21 3 21 3 8" />
+    <rect x="1" y="3" width="22" height="5" rx="1" />
+    <line x1="10" y1="12" x2="14" y2="12" />
+  </svg>
+)
+
+const IconChevron = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+    strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden="true">
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+)
+
+// ── ProjectsPage ───────────────────────────────────────────────────────────
 
 export const ProjectsPage = () => {
   const { user } = useAuth()
@@ -14,30 +43,38 @@ export const ProjectsPage = () => {
 
   if (loading) {
     return (
-      <div style={styles.page}>
-        <div style={styles.center}>
-          <div style={styles.spinner} />
-          <p style={styles.loadingText}>Loading projects…</p>
+      <AppShell activeTab="projects">
+        <div style={styles.page}>
+          <header style={styles.header}>
+            <h1 style={styles.heading}>Projects</h1>
+          </header>
+          <div style={styles.center}>
+            <div style={styles.spinner} />
+            <p style={styles.loadingText}>Loading projects…</p>
+          </div>
         </div>
-      </div>
+      </AppShell>
     )
   }
 
   if (error) {
     return (
-      <div style={styles.page}>
-        <div style={styles.center}>
-          <p style={styles.errorText}>Could not load projects.</p>
-          <button onClick={() => refetch()} style={styles.retryButton}>
-            Retry
-          </button>
+      <AppShell activeTab="projects">
+        <div style={styles.page}>
+          <header style={styles.header}>
+            <h1 style={styles.heading}>Projects</h1>
+          </header>
+          <div style={styles.center}>
+            <p style={styles.errorText}>Could not load projects.</p>
+            <button onClick={() => refetch()} style={styles.retryButton}>Retry</button>
+          </div>
         </div>
-      </div>
+      </AppShell>
     )
   }
 
-  const handleArchive = async (projectId: string) => {
-    if (!confirm('Archive this project? It will be hidden from your list.')) return
+  const handleArchive = async (projectId: string, projectName: string) => {
+    if (!confirm(`Archive "${projectName}"? It will be hidden from your list.`)) return
     setArchiving(projectId)
     try {
       await archiveProject(projectId)
@@ -50,89 +87,80 @@ export const ProjectsPage = () => {
   }
 
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.heading}>Projects</h1>
-        <button
-          id="new-project-btn"
-          onClick={() => setShowForm(true)}
-          style={styles.fab}
-          aria-label="New Project"
-        >
-          +
-        </button>
-      </header>
+    <AppShell activeTab="projects">
+      <div style={styles.page}>
+        <header style={styles.header}>
+          <h1 style={styles.heading}>Projects</h1>
+          <button
+            id="new-project-btn"
+            onClick={() => setShowForm(true)}
+            style={styles.fab}
+            aria-label="New Project"
+          >
+            <IconPlus />
+          </button>
+        </header>
 
-      {showForm && user && (
-        <NewProjectForm
-          userId={user.id}
-          onCreated={() => { setShowForm(false); refetch() }}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
+        {showForm && user && (
+          <NewProjectForm
+            userId={user.id}
+            onCreated={() => { setShowForm(false); refetch() }}
+            onCancel={() => setShowForm(false)}
+          />
+        )}
 
-      {projects.length === 0 ? (
-        <div style={styles.emptyState}>
-          <p style={styles.emptyIcon}>📋</p>
-          <p style={styles.emptyText}>No projects yet.</p>
-          <p style={styles.emptySubtext}>Tap + to create your first.</p>
-        </div>
-      ) : (
-        <div style={styles.list}>
-          {projects.map((p) => (
-            <div
-              key={p.id}
-              style={styles.card}
-              onClick={() => navigate(`/projects/${p.id}`)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') navigate(`/projects/${p.id}`)
-              }}
-            >
-              <div style={styles.cardContent}>
-                <h2 style={styles.cardTitle}>{p.name}</h2>
-                {p.customer_name && (
-                  <p style={styles.cardMeta}>{p.customer_name}</p>
-                )}
-                {p.address && (
-                  <p style={styles.cardMeta}>{p.address}</p>
-                )}
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleArchive(p.id) }}
-                disabled={archiving === p.id}
-                style={styles.archiveBtn}
-                aria-label={`Archive ${p.name}`}
-              >
-                {archiving === p.id ? '…' : '🗃️'}
-              </button>
+        {projects.length === 0 && !showForm ? (
+          <div style={styles.emptyState}>
+            <div style={styles.emptyIcon}>
+              <svg viewBox="0 0 48 48" fill="none" stroke="var(--color-border)" strokeWidth={1.5}
+                strokeLinecap="round" strokeLinejoin="round" width="52" height="52" aria-hidden="true">
+                <path d="M6 14a4 4 0 0 1 4-4h8l4 4h16a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V14z" />
+              </svg>
             </div>
-          ))}
-        </div>
-      )}
-
-      <nav style={styles.tabBar}>
-        <div style={{ ...styles.tab, ...styles.tabActive }}>
-          <span style={styles.tabIcon}>📋</span>
-          <span style={styles.tabLabel}>Projects</span>
-        </div>
-        <div
-          style={styles.tab}
-          onClick={() => navigate('/settings')}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter') navigate('/settings') }}
-        >
-          <span style={styles.tabIcon}>⚙️</span>
-          <span style={styles.tabLabel}>Settings</span>
-        </div>
-      </nav>
-    </div>
+            <p style={styles.emptyText}>No projects yet</p>
+            <p style={styles.emptySubtext}>Tap + to create your first project.</p>
+          </div>
+        ) : (
+          <div style={styles.list}>
+            {projects.map((p) => (
+              <div
+                key={p.id}
+                style={styles.card}
+                onClick={() => navigate(`/projects/${p.id}`)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/projects/${p.id}`) }}
+              >
+                <div style={styles.cardContent}>
+                  <h2 style={styles.cardTitle}>{p.name}</h2>
+                  {p.customer_name && <p style={styles.cardMeta}>{p.customer_name}</p>}
+                  {p.address && <p style={styles.cardMeta}>{p.address}</p>}
+                </div>
+                <div style={styles.cardRight}>
+                  <IconChevron />
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleArchive(p.id, p.name) }}
+                    disabled={archiving === p.id}
+                    style={styles.archiveBtn}
+                    aria-label={`Archive ${p.name}`}
+                  >
+                    {archiving === p.id ? (
+                      <div style={styles.spinnerSm} />
+                    ) : (
+                      <IconArchive />
+                    )}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </AppShell>
   )
 }
 
-// --- New Project Form ---
+// ── New Project Form ───────────────────────────────────────────────────────
 
 interface NewProjectFormProps {
   userId: string
@@ -174,11 +202,11 @@ function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
     <div style={styles.formCard}>
       <h2 style={styles.formTitle}>New Project</h2>
 
-      {error && <p style={styles.formError}>{error}</p>}
+      {error && <p style={styles.formError} role="alert">{error}</p>}
 
       <form onSubmit={handleSubmit} style={styles.form}>
         <label style={styles.label}>
-          Project Name *
+          Project Name <span style={styles.required}>*</span>
           <input
             id="project-name"
             type="text"
@@ -191,57 +219,31 @@ function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
         </label>
         <label style={styles.label}>
           Customer Name
-          <input
-            id="project-customer"
-            type="text"
-            value={customerName}
+          <input id="project-customer" type="text" value={customerName}
             onChange={(e) => setCustomerName(e.target.value)}
-            placeholder="John Smith"
-            style={styles.input}
-          />
+            placeholder="John Smith" style={styles.input} />
         </label>
         <label style={styles.label}>
           Address
-          <input
-            id="project-address"
-            type="text"
-            value={address}
+          <input id="project-address" type="text" value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="123 Main St, Anytown"
-            style={styles.input}
-          />
+            placeholder="123 Main St, Anytown" style={styles.input} />
         </label>
         <label style={styles.label}>
           Customer Email
-          <input
-            id="project-email"
-            type="email"
-            value={customerEmail}
+          <input id="project-email" type="email" value={customerEmail}
             onChange={(e) => setCustomerEmail(e.target.value)}
-            placeholder="customer@email.com"
-            style={styles.input}
-          />
+            placeholder="customer@email.com" style={styles.input} />
         </label>
         <label style={styles.label}>
           Customer Phone
-          <input
-            id="project-phone"
-            type="tel"
-            value={customerPhone}
+          <input id="project-phone" type="tel" value={customerPhone}
             onChange={(e) => setCustomerPhone(e.target.value)}
-            placeholder="(555) 123-4567"
-            style={styles.input}
-          />
+            placeholder="(555) 123-4567" style={styles.input} />
         </label>
 
         <div style={styles.formActions}>
-          <button
-            type="button"
-            onClick={onCancel}
-            style={styles.cancelBtn}
-          >
-            Cancel
-          </button>
+          <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
           <button
             id="project-submit"
             type="submit"
@@ -256,15 +258,14 @@ function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
   )
 }
 
-// --- Styles ---
+// ── Styles ─────────────────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    minHeight: '100dvh',
-    background: '#F8F9FA',
     display: 'flex',
     flexDirection: 'column',
-    paddingBottom: '72px',
+    minHeight: '100dvh',
+    background: 'var(--color-background)',
   },
   center: {
     flex: 1,
@@ -276,199 +277,146 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '16px',
   },
   spinner: {
-    width: '32px',
-    height: '32px',
-    border: '3px solid #DEE2E6',
-    borderTopColor: '#1A5276',
+    width: '30px', height: '30px',
+    border: '2.5px solid var(--color-border)',
+    borderTopColor: 'var(--color-primary)',
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
   },
-  loadingText: { color: '#6C757D', fontSize: '14px', margin: 0 },
-  errorText: { color: '#DC3545', fontSize: '16px', margin: 0 },
+  spinnerSm: {
+    width: '16px', height: '16px',
+    border: '2px solid var(--color-border)',
+    borderTopColor: 'var(--color-primary)',
+    borderRadius: '50%',
+    animation: 'spin 0.8s linear infinite',
+  },
+  loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
+  errorText:   { color: 'var(--color-danger)', fontSize: '15px', margin: 0 },
   retryButton: {
-    minHeight: '48px',
-    padding: '12px 32px',
-    background: '#1A5276',
-    color: '#FFF',
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
+    minHeight: '48px', padding: '0 32px',
+    background: 'var(--color-primary)', color: '#fff',
+    border: 'none', borderRadius: 'var(--radius-md)',
+    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '16px 16px 8px',
+    padding: '16px 20px 14px',
     paddingTop: 'max(16px, env(safe-area-inset-top))',
+    background: 'var(--color-surface)',
+    borderBottom: '1px solid var(--color-border)',
   },
   heading: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: '#1A5276',
-    margin: 0,
+    fontSize: '26px', fontWeight: 700,
+    color: 'var(--color-primary)', margin: 0,
   },
   fab: {
-    width: '48px',
-    height: '48px',
+    width: '44px', height: '44px',
     borderRadius: '50%',
-    background: '#1A5276',
-    color: '#FFF',
-    border: 'none',
-    fontSize: '24px',
-    fontWeight: 700,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 2px 8px rgba(26,82,118,0.3)',
+    background: 'var(--color-primary)', color: '#fff',
+    border: 'none', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    boxShadow: '0 2px 8px rgba(26,82,118,0.30)',
+    flexShrink: 0,
+    transition: 'background 0.15s',
   },
   list: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    padding: '8px 16px',
+    display: 'flex', flexDirection: 'column',
+    gap: '8px', padding: '12px 16px',
   },
   card: {
-    background: '#FFFFFF',
-    borderRadius: '10px',
-    padding: '16px',
-    border: '1px solid #DEE2E6',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
+    background: 'var(--color-surface)',
+    borderRadius: 'var(--radius-md)',
+    padding: '14px 16px',
+    border: '1px solid var(--color-border)',
+    display: 'flex', alignItems: 'center', gap: '12px',
     cursor: 'pointer',
+    boxShadow: 'var(--shadow-sm)',
     transition: 'box-shadow 0.15s',
   },
   cardContent: { flex: 1, minWidth: 0 },
   cardTitle: {
-    fontSize: '16px',
-    fontWeight: 600,
-    color: '#212529',
-    margin: '0 0 2px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    fontSize: '16px', fontWeight: 600,
+    color: 'var(--color-text)', margin: '0 0 2px',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   cardMeta: {
-    fontSize: '13px',
-    color: '#6C757D',
-    margin: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    fontSize: '13px', color: 'var(--color-text-muted)', margin: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  cardRight: {
+    display: 'flex', alignItems: 'center', gap: '4px',
+    color: 'var(--color-text-muted)', flexShrink: 0,
   },
   archiveBtn: {
-    width: '40px',
-    height: '40px',
-    background: 'none',
-    border: 'none',
-    fontSize: '18px',
-    cursor: 'pointer',
-    borderRadius: '8px',
-    flexShrink: 0,
+    width: '36px', height: '36px',
+    background: 'none', border: 'none',
+    cursor: 'pointer', borderRadius: 'var(--radius-sm)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: 'var(--color-text-muted)',
   },
   emptyState: {
     flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '48px 24px',
-    textAlign: 'center',
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+    padding: '48px 24px', textAlign: 'center', gap: '8px',
   },
-  emptyIcon: { fontSize: '48px', margin: '0 0 8px' },
-  emptyText: { fontSize: '18px', fontWeight: 600, color: '#495057', margin: '0 0 4px' },
-  emptySubtext: { fontSize: '14px', color: '#6C757D', margin: 0 },
-
-  // Tab bar
-  tabBar: {
-    position: 'fixed',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '64px',
-    background: '#FFFFFF',
-    borderTop: '1px solid #DEE2E6',
-    display: 'flex',
-    paddingBottom: 'env(safe-area-inset-bottom)',
+  emptyIcon: { marginBottom: '8px', color: 'var(--color-border)' },
+  emptyText: {
+    fontSize: '17px', fontWeight: 600,
+    color: 'var(--color-text)', margin: 0,
   },
-  tab: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '2px',
-    cursor: 'pointer',
-    color: '#ADB5BD',
-    fontSize: '11px',
+  emptySubtext: {
+    fontSize: '14px', color: 'var(--color-text-muted)', margin: 0,
   },
-  tabActive: { color: '#1A5276' },
-  tabIcon: { fontSize: '20px' },
-  tabLabel: { fontWeight: 500 },
-
-  // New project form
+  // Form
   formCard: {
-    margin: '8px 16px',
-    background: '#FFFFFF',
-    borderRadius: '10px',
+    margin: '10px 16px',
+    background: 'var(--color-surface)',
+    borderRadius: 'var(--radius-md)',
     padding: '20px 16px',
-    border: '1px solid #DEE2E6',
+    border: '1px solid var(--color-border)',
+    boxShadow: 'var(--shadow-sm)',
   },
-  formTitle: { fontSize: '18px', fontWeight: 600, color: '#1A5276', margin: '0 0 16px' },
+  formTitle: {
+    fontSize: '18px', fontWeight: 600,
+    color: 'var(--color-primary)', margin: '0 0 16px',
+  },
   formError: {
-    color: '#DC3545',
-    fontSize: '14px',
-    padding: '8px 12px',
-    background: '#FFF3F3',
-    borderRadius: '6px',
-    margin: '0 0 12px',
+    color: 'var(--color-danger)', fontSize: '14px',
+    padding: '10px 14px',
+    background: 'var(--color-danger-soft)',
+    borderRadius: 'var(--radius-sm)', margin: '0 0 12px',
   },
   form: { display: 'flex', flexDirection: 'column', gap: '12px' },
   label: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#495057',
+    display: 'flex', flexDirection: 'column', gap: '5px',
+    fontSize: '13px', fontWeight: 600,
+    color: 'var(--color-text-muted)',
   },
+  required: { color: 'var(--color-danger)' },
   input: {
-    padding: '12px',
-    borderRadius: '8px',
-    border: '1px solid #DEE2E6',
-    fontSize: '16px',
-    minHeight: '48px',
-    outline: 'none',
-    boxSizing: 'border-box',
+    padding: '0 14px', height: '48px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--color-border)',
+    fontSize: '16px', outline: 'none',
+    background: 'var(--color-surface)',
+    color: 'var(--color-text)',
   },
-  formActions: {
-    display: 'flex',
-    gap: '8px',
-    marginTop: '4px',
-  },
+  formActions: { display: 'flex', gap: '10px', marginTop: '4px' },
   cancelBtn: {
-    flex: 1,
-    minHeight: '48px',
-    background: '#F8F9FA',
-    color: '#495057',
-    border: '1px solid #DEE2E6',
-    borderRadius: '8px',
-    fontSize: '16px',
-    fontWeight: 500,
-    cursor: 'pointer',
+    flex: 1, minHeight: '48px',
+    background: 'var(--color-background)',
+    color: 'var(--color-text-muted)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: '16px', fontWeight: 500, cursor: 'pointer',
   },
   submitBtn: {
-    flex: 1,
-    minHeight: '48px',
-    background: '#1A5276',
-    color: '#FFF',
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
+    flex: 1, minHeight: '48px',
+    background: 'var(--color-primary)', color: '#fff',
+    border: 'none', borderRadius: 'var(--radius-md)',
+    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
   },
 }
