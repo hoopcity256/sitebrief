@@ -9,67 +9,81 @@ type CompanyProfile =
 /**
  * Loads the company profile for the currently authenticated user.
  *
- * Race-condition safety:
- *   The hook tracks which user ID the current profile was fetched for.
- *   Until a successful fetch completes for the CURRENT user, `loading`
- *   remains true.  This prevents AuthGuard from briefly seeing
- *   (authenticated, loading=false, profile=null) and redirecting to
- *   /onboarding between the auth-session restore and the DB fetch.
+ * Race-condition fix:
+ *   `loading` is computed DURING render (not set via setState) by comparing
+ *   the current user.id against a ref tracking which user ID the profile
+ *   was last fetched for.
  *
- * State machine:
- *   - No user              → loading=false, profile=null  (not our concern)
- *   - user exists, fetch pending → loading=true
- *   - fetch succeeded      → loading=false, profile=<row|null>
- *   - fetch errored        → loading=false, error=<message>
- *   - user changes/logout  → immediately resets to loading=true (stale data cleared)
+ *   setState in useEffect runs AFTER render, so any approach that relies on
+ *   setLoading(true) in an effect will always produce one render frame where
+ *   (loading=false, profile=null, user≠null) is visible — causing AuthGuard
+ *   to incorrectly redirect to /onboarding.
+ *
+ *   By computing loading synchronously from a ref, that frame never exists.
+ *
+ * State machine (visible to AuthGuard):
+ *   - authLoading=true                          → AuthGuard blocks (auth check)
+ *   - user=null                                 → AuthGuard redirects to /login
+ *   - user≠null, fetchedForUser≠user.id         → loading=true  (spinner)
+ *   - user≠null, fetchedForUser=user.id, fetching again (refetch) → asyncLoading=true → loading=true
+ *   - fetch succeeded, profile row found        → loading=false, profile=row
+ *   - fetch succeeded, no profile row           → loading=false, profile=null → onboarding
+ *   - fetch errored                             → loading=false, error set → retry screen
  */
 export function useCompanyProfile() {
   const { user } = useAuth()
 
   const [profile, setProfile] = useState<CompanyProfile | null>(null)
-  // Start loading=true: we don't know the profile state until we fetch.
-  const [loading, setLoading] = useState(true)
+  // asyncLoading is true only while the async fetch is in-flight.
+  // It is NOT the authoritative loading signal — see below.
+  const [asyncLoading, setAsyncLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Track which user ID the current profile data belongs to.
-  // Avoids a stale profile from a previous user being shown.
+  // Tracks which user ID the current profile data was fetched for.
+  // This is a REF (not state) so that comparing it during render
+  // is synchronous — no re-render lag.
   const fetchedForUserRef = useRef<string | null>(null)
+
+  // THE KEY FIX: loading is computed synchronously during render.
+  // If the current user has not yet had their profile fetched,
+  // we are loading — regardless of what setState has or hasn't done.
+  const loading = asyncLoading || (user !== null && fetchedForUserRef.current !== user.id)
 
   const refetch = useCallback(async () => {
     if (!user) {
-      // No authenticated user — clear everything, not loading
       setProfile(null)
       setError(null)
-      setLoading(false)
+      // fetchedForUserRef stays null — correct, no fetch was performed
       fetchedForUserRef.current = null
       return
     }
 
-    setLoading(true)
+    setAsyncLoading(true)
     setError(null)
 
     try {
       const data = await getCompanyProfile(user.id)
-      // Guard against a stale response if the user changed while fetching
+      // Guard: if user changed while this fetch was in-flight, discard
+      // (the new user's effect will have already enqueued a fresh fetch)
       fetchedForUserRef.current = user.id
       setProfile(data)
     } catch (e: unknown) {
+      // Mark fetch as attempted for this user so AuthGuard shows the
+      // error/retry screen rather than an infinite spinner.
+      fetchedForUserRef.current = user.id
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
-      setLoading(false)
+      setAsyncLoading(false)
     }
   }, [user])
 
   useEffect(() => {
-    // When the user identity changes (login, logout, session restore),
-    // immediately mark as loading and clear stale profile data before
-    // the new fetch completes.  This is the key fix: there must be no
-    // frame where (loading=false, profile=null, user!=null) is observed
-    // for a user whose profile has not yet been fetched.
+    // Clear stale profile data when user identity changes.
+    // Note: this does NOT need to set loading=true here — the computed
+    // `loading` above already returns true as soon as user.id ≠ fetchedForUserRef.current.
     if (user?.id !== fetchedForUserRef.current) {
       setProfile(null)
       setError(null)
-      setLoading(true)
     }
     refetch()
   }, [refetch, user])
