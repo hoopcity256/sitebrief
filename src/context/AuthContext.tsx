@@ -21,6 +21,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Set loading=true before subscribing so the initial getSession
+    // result is always gated behind the loading state.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
@@ -28,6 +30,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Re-enter loading state on every auth event so that downstream
+      // consumers (useCompanyProfile, AuthGuard) never see a stale user
+      // with a completed loading state.
+      setLoading(true)
       setSession(session)
       setUser(session?.user ?? null)
       setLoading(false)

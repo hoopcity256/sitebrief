@@ -35,6 +35,7 @@ export const CreateReportPage = () => {
   const [saving, setSaving] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [lastSaved, setLastSaved] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [recoveryBanner, setRecoveryBanner] = useState(false)
   const recoveredDraftRef = useRef<{ work_completed: string; problems: string; next_steps: string } | null>(null)
 
@@ -162,10 +163,12 @@ export const CreateReportPage = () => {
       // Only update lastSaved and clear IDB if revision hasn't advanced
       if (capturedRevision === revisionRef.current) {
         setLastSaved(new Date(result.updated_at).toLocaleTimeString())
+        setSaveError(null)
         clearDraft(reportId).catch(() => {})
       }
     } catch {
-      // Silent — autosave failure is non-blocking
+      // Show a visible warning — autosave failure is non-blocking but not silent
+      setSaveError('Not saved — check your connection')
     } finally {
       setSaving(false)
     }
@@ -286,9 +289,10 @@ export const CreateReportPage = () => {
 
   // Cleanup all object URLs on unmount
   useEffect(() => {
+    const urlSet = photoUrlsRef.current
     return () => {
-      photoUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
-      photoUrlsRef.current.clear()
+      urlSet.forEach(url => URL.revokeObjectURL(url))
+      urlSet.clear()
     }
   }, [])
 
@@ -352,8 +356,8 @@ export const CreateReportPage = () => {
         <h1 style={styles.heading}>
           Report #{reportNumber}
         </h1>
-        <div style={styles.saveStatus}>
-          {saving ? 'Saving…' : lastSaved ? `Saved ${lastSaved}` : ''}
+        <div style={saving ? styles.saveStatus : saveError ? styles.saveError : styles.saveStatus}>
+          {saving ? 'Saving…' : saveError ? `⚠ ${saveError}` : lastSaved ? `Saved ${lastSaved}` : ''}
         </div>
       </header>
 
@@ -471,6 +475,7 @@ const styles: Record<string, React.CSSProperties> = {
   backBtn: { width: '40px', height: '40px', background: 'none', border: '1px solid #DEE2E6', borderRadius: '8px', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   heading: { fontSize: '18px', fontWeight: 700, color: '#1A5276', margin: 0, flex: 1 },
   saveStatus: { fontSize: '12px', color: '#6C757D', flexShrink: 0 },
+  saveError: { fontSize: '12px', color: '#DC3545', flexShrink: 0, fontWeight: 600 },
   editorBody: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
   label: { display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '14px', fontWeight: 600, color: '#495057' },
   textarea: { padding: '12px', borderRadius: '8px', border: '1px solid #DEE2E6', fontSize: '16px', fontFamily: 'inherit', resize: 'vertical' as const, outline: 'none', minHeight: '96px' },

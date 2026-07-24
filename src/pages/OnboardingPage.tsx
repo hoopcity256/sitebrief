@@ -35,7 +35,7 @@ export const OnboardingPage = () => {
         onboarding_complete: true,
       })
       navigate('/projects')
-    } catch (err: unknown) {
+    } catch {
       setError('Could not save your company profile. Please try again.')
     } finally {
       setSubmitting(false)

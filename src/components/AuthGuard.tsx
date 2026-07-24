@@ -8,17 +8,26 @@ export const AuthGuard = ({ children }: { children: React.ReactNode }) => {
   const { profile, loading: profileLoading, error: profileError, refetch } = useCompanyProfile()
   const location = useLocation()
 
-  // 1. Block on loading — never render children or navigate
-  if (authLoading || profileLoading) {
-    return (
-      <div style={styles.center}>
-        <div style={styles.spinner} />
-        <p style={styles.loadingText}>Loading…</p>
-      </div>
-    )
+  // 1. Block while auth session is resolving
+  if (authLoading) {
+    return <LoadingScreen />
   }
 
-  // 2. Block on error — retryable, never pass through
+  // 2. Unauthenticated → login (preserve destination for post-login redirect)
+  if (!user) {
+    return <Navigate to="/login" state={{ from: location }} replace />
+  }
+
+  // 3. Block while profile is loading for this user.
+  //    useCompanyProfile guarantees loading=true whenever the fetched
+  //    user ID doesn't match the current user, so this prevents the
+  //    brief (authenticated, no-profile) window that caused the
+  //    spurious /onboarding redirect on deep-link refresh.
+  if (profileLoading) {
+    return <LoadingScreen />
+  }
+
+  // 4. Block on profile fetch error — retryable, never pass through
   if (profileError) {
     return (
       <div style={styles.center}>
@@ -34,20 +43,22 @@ export const AuthGuard = ({ children }: { children: React.ReactNode }) => {
     )
   }
 
-  // 3. Unauthenticated → login
-  if (!user) {
-    return <Navigate to="/login" state={{ from: location }} replace />
-  }
-
-  // 4. Needs onboarding → /onboarding (but don't redirect if already there)
+  // 5. Needs onboarding → /onboarding (but don't redirect if already there)
   const needsOnboarding = !profile || !profile.onboarding_complete
   if (needsOnboarding && location.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />
   }
 
-  // 5. Render protected children
+  // 6. Render protected children
   return <>{children}</>
 }
+
+const LoadingScreen = () => (
+  <div style={styles.center}>
+    <div style={styles.spinner} />
+    <p style={styles.loadingText}>Loading…</p>
+  </div>
+)
 
 const styles: Record<string, React.CSSProperties> = {
   center: {
