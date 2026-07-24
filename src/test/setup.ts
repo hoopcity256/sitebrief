@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
 
 // Mock createImageBitmap and canvas for unit tests
