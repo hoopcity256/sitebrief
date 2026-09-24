@@ -4,6 +4,7 @@ import { getProject } from '../lib/projects'
 import { createReport, listReportsForProject } from '../lib/reports'
 import type { ProjectRow } from '../lib/projects'
 import { AppShell } from '../components/AppShell'
+import { useSubscription } from '../hooks/useSubscription'
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────
 
@@ -47,6 +48,8 @@ export const ProjectDetailPage = () => {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
+  const { subscription, loading: subLoading } = useSubscription()
+
   const fetchData = useCallback(async () => {
     if (!id) return
     setLoading(true)
@@ -70,6 +73,8 @@ export const ProjectDetailPage = () => {
   // One-shot button handler — never from useEffect
   const handleNewReport = async () => {
     if (!id || creating) return
+    // Client-side entitlement gate — mirrors DB has_active_access()
+    if (!subscription.entitled) return
     setCreating(true)
     setCreateError(null)
     try {
@@ -77,7 +82,7 @@ export const ProjectDetailPage = () => {
       navigate(`/update/${id}/new?reportId=${result.report_id}`)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : ''
-      if (msg.includes('Active subscription required') || msg.includes('has_active_access')) {
+      if (msg.includes('active subscription') || msg.includes('has_active_access')) {
         setCreateError('An active subscription is required to create reports.')
       } else {
         setCreateError('Could not create report. Please try again.')
@@ -150,13 +155,36 @@ export const ProjectDetailPage = () => {
           </div>
         )}
 
+        {/* Subscription upsell banner (shown when not loading + not entitled) */}
+        {!subLoading && !subscription.entitled && (
+          <div style={styles.upsellBanner} role="alert">
+            <span style={styles.upsellText}>
+              {subscription.row
+                ? '⚠ Your trial or subscription has expired. Subscribe to create new reports.'
+                : '⚠ A subscription is required to create reports.'}
+            </span>
+            <button
+              id="subscribe-cta-btn"
+              style={styles.upsellBtn}
+              onClick={() => navigate('/more')}
+            >
+              View Plans
+            </button>
+          </div>
+        )}
+
         {/* New report CTA */}
         <div style={styles.ctaArea}>
           <button
             id="new-report-btn"
-            style={{ ...styles.newReportBtn, opacity: creating ? 0.6 : 1 }}
+            style={{
+              ...styles.newReportBtn,
+              opacity: (creating || !subscription.entitled) ? 0.5 : 1,
+              cursor: !subscription.entitled ? 'not-allowed' : 'pointer',
+            }}
             onClick={handleNewReport}
-            disabled={creating}
+            disabled={creating || !subscription.entitled}
+            aria-disabled={!subscription.entitled}
           >
             <IconPlus />
             <span>{creating ? 'Creating…' : 'New Daily Report'}</span>
@@ -291,6 +319,24 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   ctaArea: { padding: '16px 16px 0' },
+  upsellBanner: {
+    margin: '12px 16px 0',
+    padding: '12px 16px',
+    background: 'var(--color-warning-soft)',
+    border: '1px solid var(--color-warning)',
+    borderRadius: 'var(--radius-md)',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: '12px', flexWrap: 'wrap' as const,
+  },
+  upsellText: {
+    fontSize: '13px', color: 'var(--color-text)', flex: 1,
+  },
+  upsellBtn: {
+    flexShrink: 0, minHeight: '36px', padding: '0 16px',
+    background: 'var(--color-primary)', color: '#fff',
+    border: 'none', borderRadius: 'var(--radius-sm)',
+    fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+  },
   newReportBtn: {
     width: '100%', minHeight: '52px',
     background: 'var(--color-primary)', color: '#fff',

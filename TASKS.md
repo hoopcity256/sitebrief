@@ -43,17 +43,23 @@ Production migration may be authorized only after:
 - [x] T3.10 — TASKS.md Day 3 status update
 
 ## Day 4 — PDF
-- [ ] Client-side PDF with `@react-pdf/renderer`
-- [ ] Report history (list and tap to view/share)
-- [ ] Web Share API integration; download fallback
-- [ ] Cross-browser PDF testing
+- [x] Client-side PDF with `@react-pdf/renderer` (`lib/pdf.tsx` complete)
+- [x] Report history (list and tap to view/share) — via `ProjectDetailPage`
+- [x] Web Share API integration; download fallback (`lib/share.ts`)
+- [x] `ReportPreviewPage` wired: dynamic import, generate, share/download
+- [ ] Cross-browser PDF testing (iOS Safari, Android Chrome, desktop Chrome) — must pass before Day 4 sign-off
 
 ## Day 5 — Billing
-- [ ] Stripe products, prices, and 14-day trial configuration
-- [ ] `create-checkout-session` Edge Function (explicit trial config)
-- [ ] `stripe-webhook` Edge Function (idempotent, via `stripe_webhook_events`)
-- [ ] `create-portal-session` Edge Function
-- [ ] Subscription access gates
+- [x] `lib/subscription.ts` — browser-side subscription fetch, entitlement helpers, checkout/portal redirects
+- [x] `hooks/useSubscription.ts` — React hook with loading/error/refetch
+- [x] `ProjectDetailPage` — subscription gate on "New Report" button + upsell banner
+- [x] `MorePage` — live subscription status, trial countdown, upgrade buttons, Stripe Portal link
+- [x] `BillingSuccessPage` + `BillingCancelPage` — real return pages replacing placeholders
+- [x] `supabase/functions/create-checkout-session/index.ts` — Stripe Checkout Edge Function
+- [x] `supabase/functions/stripe-webhook/index.ts` — idempotent webhook handler
+- [x] `supabase/functions/create-portal-session/index.ts` — Customer Portal Edge Function
+- [ ] Stripe products, prices, and 14-day trial configuration (H5 — human action)
+- [ ] End-to-end billing test: trial checkout → active → cancellation in Stripe test mode (requires H5, H7, H8)
 
 ## Day 6 — Polish and Security
 - [ ] Full QA pass
@@ -84,7 +90,7 @@ Production migration may be authorized only after:
 | H7 | After first `*.pages.dev` deploy: add webhook endpoint `https://sitebrief.scope-guard.com/functions/v1/stripe-webhook` in Stripe dashboard; copy signing secret to Edge Function secrets | Human | ⬜ Not started |
 | H8 | Set Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MONTHLY_PRICE_ID`, `STRIPE_ANNUAL_PRICE_ID` | Human | ⬜ Not started |
 | H9 | Publish privacy policy, terms of service, refund policy, and support contact page | Human | ⬜ Not started |
-| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add env vars `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
+| H10 | Create dedicated SiteBrief Cloudflare Pages project; connect SiteBrief GitHub repo; add env vars `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_STRIPE_MONTHLY_PRICE_ID`, `VITE_STRIPE_ANNUAL_PRICE_ID`; then add custom domain `sitebrief.scope-guard.com` | Human | ⬜ Not started |
 | HA-AUTH-1 | Configure custom SMTP provider in Supabase (Auth → SMTP Settings) | Human | ⬜ Not started |
 | HA-AUTH-2 | Verify sender domain/address with SMTP provider | Human | ⬜ Not started |
 | HA-AUTH-3 | Customize confirmation email template | Human | ⬜ Not started |
