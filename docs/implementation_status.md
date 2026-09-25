@@ -12,7 +12,7 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ## Current Accepted Baseline
 
-`84d8ab9  feat(ui): implement North Star experience and project covers`
+`b89574e  feat(ui): complete North Star auth and onboarding`
 Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
@@ -29,14 +29,16 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | CP4 | `cb6f2e5` | Projects experience redesign |
 | CP5 | `1937f89` | Project Detail + Report History Navigation |
 | **NS+CP6** | **`84d8ab9`** | **North Star visual transformation + CP6 editor + project cover photos** |
+| **NS Auth** | **`b89574e`** | **North Star auth + onboarding redesign — OWNER APPROVED** |
 
 ---
 
 ## Current Checkpoint
 
-### NORTH STAR VISUAL TRANSFORMATION — APPROVED FOR COMMIT
+### HOSTED SANDBOX DEPLOYMENT — PENDING CLOUDFLARE TOKEN
 
-**Status: COMMITTED — awaiting push confirmation.**
+**Accepted baseline:** `b89574e  feat(ui): complete North Star auth and onboarding`
+**Status:** Configuration complete — deployment blocked on Cloudflare API token (one manual step required from owner — see below).
 
 #### What this checkpoint delivers
 
@@ -220,12 +222,103 @@ Without this configuration, Supabase will reject the redirect URL and the email 
 
 ---
 
-## Next After Owner Visual Acceptance
+---
 
-Sandbox-backed hosted deployment / mobile device testing.
+## Hosted Sandbox Deployment
+
+**Accepted baseline:** `b89574e  feat(ui): complete North Star auth and onboarding`
+**Status:** CONFIGURATION COMPLETE — blocked on one owner action (Cloudflare API token)
+
+### Hosting Target
+
+| Field | Value |
+|-------|-------|
+| Provider | Cloudflare Pages |
+| Project name | `sitebrief-sandbox` |
+| Target URL | `https://sitebrief-sandbox.pages.dev` (exact URL assigned after first deploy) |
+| Production URL (DO NOT USE) | `sitebrief.scope-guard.com` — reserved for production |
+| Sandbox Supabase ref | `toitahshmkxazxqqopzg` (sitebrief-test) |
+| Production Supabase (DO NOT TOUCH) | `qbycpzfyugrsbckrpyak` (sitebrief) |
+| Stripe environment | Sandbox (test) — Stripe Live untouched |
+
+### Environment Variables (by name only — no secrets)
+
+These 4 VITE_ vars must be set as **Build Variables** in the Cloudflare Pages project settings (not Worker secrets):
+
+| Variable | Purpose |
+|----------|---------|
+| `VITE_SUPABASE_URL` | Sandbox Supabase project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Sandbox anon/publishable key (safe to expose — client-side) |
+| `VITE_STRIPE_MONTHLY_PRICE_ID` | Sandbox monthly price ID |
+| `VITE_STRIPE_ANNUAL_PRICE_ID` | Sandbox annual price ID |
+
+### Build Configuration
+
+| Setting | Value |
+|---------|-------|
+| Build command | `npm run build` |
+| Output directory | `dist` |
+| Node.js version | 18+ |
+| SPA fallback | `public/_redirects` → `/* /index.html 200` ✅ already present |
+| Security headers | `public/_headers` ✅ already present |
+
+### Billing Redirect Analysis
+
+Both Edge Functions (`create-checkout-session`, `create-portal-session`) use `getBaseUrl(req)` which derives `success_url`, `cancel_url`, and `return_url` **from the request Origin header** — not hardcoded. The sandbox pages.dev origin will be allowed automatically once it matches `APP_URL` env var or `localhost` patterns. No Edge Function code changes required.
+
+For the sandbox Edge Functions, set `APP_URL=https://sitebrief-sandbox.pages.dev` (or the actual pages.dev URL) in the **sandbox** Edge Function secrets via Supabase dashboard.
+
+### Auth Redirect Status
+
+| URL | Status |
+|-----|--------|
+| `http://localhost:5173/update-password` | ✅ Applied to sandbox via `supabase config push` |
+| `https://<pages.dev URL>/update-password` | ⏳ Must be added after first deploy gives exact URL |
+
+### Deployment Command (ready to run)
+
+```bash
+# Step 1: Build (already done — dist/ exists)
+cmd /c "npm run build"
+
+# Step 2: Deploy (owner must supply token and account ID)
+cmd /c "set CLOUDFLARE_API_TOKEN=<token> && set CLOUDFLARE_ACCOUNT_ID=<account_id> && npx wrangler pages deploy dist --project-name=sitebrief-sandbox"
+```
+
+### Quality Gate (pre-deploy)
+
+| Gate | Result |
+|------|--------|
+| `npm test -- --run` | ✅ 37/37 passing |
+| `npx tsc --noEmit` | ✅ 0 errors |
+| `npm run build` | ✅ Clean |
+| `git diff --check` | ✅ Clean |
+| North Star/ untracked | ✅ Confirmed |
+| Production untouched | ✅ Confirmed |
+
+### One Manual Owner Action Required
+
+**To unblock deployment:**
+
+> Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) → My Profile → API Tokens → Create Token → use **Edit Cloudflare Pages** template.
+> Copy the token and your Account ID (visible on any zone overview page).
+> Run the deployment command above (or provide values here for agent execution).
+
+### Post-Deploy Steps (after URL is known)
+
+1. Add `https://<actual-pages-dev-url>/update-password` to sandbox Supabase (`toitahshmkxazxqqopzg`) → Authentication → URL Configuration → Redirect URLs (Supabase Dashboard — targeted change only)
+2. Set `APP_URL=https://<actual-pages-dev-url>` in sandbox Edge Function secrets
+3. Set VITE_ build variables in Cloudflare Pages project settings
+4. Perform owner device test checklist
+
+### Next Phase After Device Acceptance
+
+**PREVIEW + PROFESSIONAL PDF**
+
 **Preview/PDF has NOT started.**
 
 ---
+
 
 ## CP6 Owner Corrections Applied
 
