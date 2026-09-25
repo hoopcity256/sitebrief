@@ -10,9 +10,9 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ---
 
-## Accepted Baseline Before CP4 Commit
+## Accepted Baseline Before CP5 Commit
 
-`4a00b78  feat(ui): redesign auth and onboarding`
+`cb6f2e5  feat(ui): redesign projects experience`
 Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
@@ -24,13 +24,14 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | Billing | `d203f79` | Stripe subscription lifecycle |
 | CP1 | `c04029d` | Design system foundation |
 | CP2 | `8304967` | AppShell / Navigation (useLocation authoritative) |
-| Docs | `08035d8` | Design spec restored to docs/final_design_spec.md |
+| Docs | `08035d8` | Design spec restored |
 | CP3 | `4a00b78` | Auth + Onboarding redesign |
-| CP4 | _(see log after commit)_ | Projects experience — **APPROVED FOR COMMIT** |
+| CP4 | `cb6f2e5` | Projects experience redesign |
+| CP5 | _(see log after commit)_ | Project Detail + Report History Navigation — **APPROVED FOR COMMIT** |
 
 ---
 
-## CP4 Quality Gate
+## CP5 Quality Gate
 
 | Gate | Result |
 |------|--------|
@@ -41,26 +42,48 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
 
-## CP4 Changes (committed)
+## CP5 Changes (committed)
 
-- `src/pages/ProjectsPage.tsx` — full redesign: SiteBrief wordmark mobile header (hidden on desktop), 48×48 FAB, semantic `<button>` card body for navigation, `BuildingIcon` anchor, typography hierarchy, three-dot menu with archive action, skeleton loaders, polished empty state with CTA, error state, explicit label/id form associations, all existing CRUD logic preserved
-- `src/index.css` — +483 lines of projects CSS classes (additive; no existing classes changed)
-- `src/components/icons.tsx` — `ArchiveIcon` added to shared icon library
-- Interaction defect fixed: `onBlur` for menu close moved from `.project-card__menu-zone` (which did not contain the popover) to the outer `.project-card-wrap` — prevents premature menu close when focus moves from the ellipsis button to the archive button
+- `src/pages/ProjectDetailPage.tsx` — full redesign: CSS classes, skeleton loading, compact info strip with PersonIcon/MapPinIcon/phone SVG/MailIcon/FileTextIcon, upsell banner (no emoji), 52px New Report CTA, "Recent Reports" overline section label, semantic `<ul>/<li>/<button>` report cards, `badge--draft`/`badge--final` pills, all logic preserved
+- `src/index.css` — +378 lines of project-detail CSS classes (additive; no existing classes changed)
+- `docs/implementation_status.md` — updated
+
+**Owner corrections applied:**
+- Back button: increased from 40×40 → **48×48px** (ChevronLeftIcon remains 18px)
+- Email icon: `DocumentIcon` → **`MailIcon`** (no icons.tsx modification required — already existed)
 
 ---
 
-## CP4 Deferred
+## CP5 Critical Navigation Fix
 
-- **Report count / last-report-date**: not exposed by `listProjects` (no join to `reports`). `project_report_counters` view exists in schema but is not wired. Deferred until owner authorizes approach.
-- iPhone Safari/Chrome visual validation: deferred to later mobile QA
-- Browser automation: non-blocking/deferred
+**Owner decision 15 (from final_design_spec.md §K):**
+
+| Report Status | Old Behavior | New Behavior |
+|---------------|-------------|-------------|
+| `is_draft = true` | `/update/${id}/new?reportId=${r.id}` ✅ | `/update/${id}/new?reportId=${r.id}` ✅ unchanged |
+| `is_draft = false` | `/update/${id}/new?reportId=${r.id}` ❌ | `/preview/${r.id}` ✅ FIXED |
+
+---
+
+## CP5 Behavior
+
+- **Draft reports** → editor: `/update/${id}/new?reportId=${r.id}`
+- **Final reports** → preview: `/preview/${r.id}`
+- **New Report subscription gating** preserved exactly (`subscription.entitled` client gate + `disabled` prop + server-side RPC)
+- **Report summary** (count + last date) derived from already-loaded `reports[]` array — no additional Supabase query introduced
+
+---
+
+## CP5 Deferred
+
+- Actual iPhone Safari/Chrome visual validation remains deferred
+- Browser automation remains non-blocking/deferred
 
 ---
 
 ## Next Checkpoint
 
-**CP5 — Project Detail**
+**CP6 — Report Editor**
 Status: **NOT STARTED. Awaiting owner authorization.**
 
 ---
@@ -73,7 +96,7 @@ Status: **NOT STARTED. Awaiting owner authorization.**
 | D2 | PDF bundle chunk >500 kB (pre-existing) | CP8 |
 | D3 | Dedicated maskable PWA icons | CP9 |
 | D4 | Browser screenshot automation | Post-launch |
-| D5 | Report count + last-report-date on project cards | Owner authorization required |
+| D5 | Report count metadata on CP4 project cards | Owner authorization required |
 
 ---
 
@@ -82,14 +105,13 @@ Status: **NOT STARTED. Awaiting owner authorization.**
 ```
 North Star/
 ```
-Owner visual reference material. Do **not** modify, stage, delete, or commit without explicit owner authorization.
+Owner visual reference. Do **not** modify, stage, delete, or commit without explicit owner authorization.
 
 ---
 
 ## Roadmap
 
 ```
-CP5   Project Detail + report navigation
 CP6   Report Editor + Photo UX
 CP7   Preview + More / Billing
 CP8   Professional PDF redesign
@@ -99,22 +121,8 @@ CP10  Final QA / regression
 
 ---
 
-## Safety Rule
-
-No Antigravity / plugin / MCP / browser-tool configuration changes while application work is uncommitted.
-
----
-
 ## Checkpoint Workflow
 
 ```
-IMPLEMENT
-  → TEST  (npm test -- --run)
-  → TYPECHECK  (npx tsc --noEmit)
-  → BUILD  (npm run build)
-  → OWNER REVIEW
-  → UPDATE  docs/implementation_status.md
-  → COMMIT
-  → PUSH
-  → NEXT CHECKPOINT
+IMPLEMENT → TEST → TYPECHECK → BUILD → OWNER REVIEW → UPDATE STATUS → COMMIT → PUSH → NEXT CP
 ```

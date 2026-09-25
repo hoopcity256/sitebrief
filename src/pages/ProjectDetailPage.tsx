@@ -1,34 +1,46 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getProject } from '../lib/projects'
 import { createReport, listReportsForProject } from '../lib/reports'
 import type { ProjectRow } from '../lib/projects'
 import { AppShell } from '../components/AppShell'
 import { useSubscription } from '../hooks/useSubscription'
+import {
+  ChevronLeftIcon,
+  PlusIcon,
+  ChevronRightIcon,
+  FileTextIcon,
+  PersonIcon,
+  MapPinIcon,
+  MailIcon,
+} from '../components/icons'
 
-// ── SVG Icons ──────────────────────────────────────────────────────────────
+// ── Type for report list items ─────────────────────────────────────────────
+type ReportListItem = {
+  id: string
+  report_number: number
+  is_draft: boolean
+  created_at: string
+  generated_at: string | null
+}
 
-const IconBack = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-    strokeLinecap="round" strokeLinejoin="round" width="18" height="18" aria-hidden="true">
-    <polyline points="15 18 9 12 15 6" />
-  </svg>
-)
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-const IconPlus = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}
-    strokeLinecap="round" strokeLinejoin="round" width="18" height="18" aria-hidden="true">
-    <line x1="12" y1="5" x2="12" y2="19" />
-    <line x1="5" y1="12" x2="19" y2="12" />
-  </svg>
-)
+function formatDate(isoString: string): string {
+  return new Date(isoString).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
 
-const IconChevron = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-    strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden="true">
-    <polyline points="9 18 15 12 9 6" />
-  </svg>
-)
+function formatReportSummary(reports: ReportListItem[]): string {
+  const count = reports.length
+  if (count === 0) return 'No reports yet'
+  const last = reports[0] // ordered desc so index 0 is latest
+  const dateStr = formatDate(last.created_at)
+  return `${count} ${count === 1 ? 'Report' : 'Reports'} · Last ${dateStr}`
+}
 
 // ── ProjectDetailPage ──────────────────────────────────────────────────────
 
@@ -36,13 +48,7 @@ export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [project, setProject] = useState<ProjectRow | null>(null)
-  const [reports, setReports] = useState<{
-    id: string
-    report_number: number
-    is_draft: boolean
-    created_at: string
-    generated_at: string | null
-  }[]>([])
+  const [reports, setReports] = useState<ReportListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -70,10 +76,9 @@ export const ProjectDetailPage = () => {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  // One-shot button handler — never from useEffect
+  // One-shot handler — never from useEffect; subscription guard preserved
   const handleNewReport = async () => {
     if (!id || creating) return
-    // Client-side entitlement gate — mirrors DB has_active_access()
     if (!subscription.entitled) return
     setCreating(true)
     setCreateError(null)
@@ -92,29 +97,35 @@ export const ProjectDetailPage = () => {
     }
   }
 
+  // ── Loading state: skeleton ─────────────────────────────────────────────
   if (loading) {
     return (
-      <AppShell activeTab="projects">
-        <div style={styles.page}>
-          {renderHeader(navigate)}
-          <div style={styles.center}>
-            <div style={styles.spinner} />
-            <p style={styles.loadingText}>Loading project…</p>
+      <AppShell>
+        <div className="detail-page">
+          <DetailHeader onBack={() => navigate('/projects')} title="Project" />
+          <div className="detail-skeleton" aria-label="Loading project" aria-busy="true">
+            <div className="skeleton detail-skeleton__strip" aria-hidden="true" />
+            <div className="skeleton detail-skeleton__btn" aria-hidden="true" />
+            <div className="skeleton detail-skeleton__card" aria-hidden="true" />
+            <div className="skeleton detail-skeleton__card" aria-hidden="true" />
           </div>
         </div>
       </AppShell>
     )
   }
 
+  // ── Error state ─────────────────────────────────────────────────────────
   if (error || !project) {
     return (
-      <AppShell activeTab="projects">
-        <div style={styles.page}>
-          {renderHeader(navigate)}
-          <div style={styles.center}>
-            <p style={styles.errorText}>Could not load project.</p>
-            <button onClick={() => fetchData()} style={styles.retryButton}>Retry</button>
-            <button onClick={() => navigate('/projects')} style={styles.textLink}>
+      <AppShell>
+        <div className="detail-page">
+          <DetailHeader onBack={() => navigate('/projects')} title="Project" />
+          <div className="detail-center">
+            <p className="detail-error-text">Could not load project.</p>
+            <button type="button" onClick={() => fetchData()} className="detail-retry-btn">
+              Retry
+            </button>
+            <button type="button" onClick={() => navigate('/projects')} className="detail-back-link">
               ← Back to Projects
             </button>
           </div>
@@ -123,49 +134,93 @@ export const ProjectDetailPage = () => {
     )
   }
 
-  return (
-    <AppShell activeTab="projects">
-      <div style={styles.page}>
-        <header style={styles.header}>
-          <button
-            onClick={() => navigate('/projects')}
-            style={styles.backBtn}
-            aria-label="Back to projects"
-          >
-            <IconBack />
-          </button>
-          <h1 style={styles.heading}>{project.name}</h1>
-        </header>
+  const hasCustomer = Boolean(project.customer_name)
+  const hasAddress  = Boolean(project.address)
+  const hasPhone    = Boolean(project.customer_phone)
+  const hasEmail    = Boolean(project.customer_email)
+  const hasInfo     = hasCustomer || hasAddress || hasPhone || hasEmail
+  const reportSummary = formatReportSummary(reports)
+  const notEntitled = !subLoading && !subscription.entitled
 
-        {/* Project metadata */}
-        {(project.customer_name || project.address) && (
-          <div style={styles.metaCard}>
-            {project.customer_name && (
-              <div style={styles.metaRow}>
-                <span style={styles.metaLabel}>Customer</span>
-                <span style={styles.metaValue}>{project.customer_name}</span>
+  // ── Report navigation — AUTHORIZED FIX (owner decision 15) ────────────
+  // Draft  → editor  (/update/:projectId/new?reportId=...)
+  // Final  → preview (/preview/:reportId)
+  const handleReportClick = (r: ReportListItem) => {
+    if (r.is_draft) {
+      navigate(`/update/${id}/new?reportId=${r.id}`)
+    } else {
+      navigate(`/preview/${r.id}`)
+    }
+  }
+
+  return (
+    <AppShell>
+      <div className="detail-page">
+        {/* Header */}
+        <DetailHeader onBack={() => navigate('/projects')} title={project.name} />
+
+        {/* Info strip */}
+        {(hasInfo || reports.length >= 0) && (
+          <div className="detail-info-strip">
+            {hasCustomer && (
+              <div className="detail-info-row">
+                <span className="detail-info-icon" aria-hidden="true">
+                  <PersonIcon size={16} />
+                </span>
+                <span className="detail-info-text">{project.customer_name}</span>
               </div>
             )}
-            {project.address && (
-              <div style={{ ...styles.metaRow, borderBottom: 'none' }}>
-                <span style={styles.metaLabel}>Address</span>
-                <span style={styles.metaValue}>{project.address}</span>
+            {hasAddress && (
+              <div className="detail-info-row">
+                <span className="detail-info-icon" aria-hidden="true">
+                  <MapPinIcon size={16} />
+                </span>
+                <span className="detail-info-text">{project.address}</span>
               </div>
             )}
+            {hasPhone && (
+              <div className="detail-info-row">
+                <span className="detail-info-icon" aria-hidden="true">
+                  {/* Phone icon — inline SVG since PhoneIcon not in lib yet */}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth={1.75}
+                    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.56 3.44 2 2 0 0 1 3.53 1.27h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.92-.92a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 21.73 16z" />
+                  </svg>
+                </span>
+                <span className="detail-info-text">{project.customer_phone}</span>
+              </div>
+            )}
+            {hasEmail && (
+              <div className="detail-info-row">
+                <span className="detail-info-icon" aria-hidden="true">
+                  <MailIcon size={16} />
+                </span>
+                <span className="detail-info-text">{project.customer_email}</span>
+              </div>
+            )}
+            {/* Report count / last date — derived from already-loaded reports */}
+            <div className="detail-info-row">
+              <span className="detail-info-icon" aria-hidden="true">
+                <FileTextIcon size={16} />
+              </span>
+              <span className="detail-info-text detail-info-text--muted">{reportSummary}</span>
+            </div>
           </div>
         )}
 
-        {/* Subscription upsell banner (shown when not loading + not entitled) */}
-        {!subLoading && !subscription.entitled && (
-          <div style={styles.upsellBanner} role="alert">
-            <span style={styles.upsellText}>
+        {/* Upsell banner — shown when subscription not entitled */}
+        {notEntitled && (
+          <div className="detail-upsell" role="alert">
+            <span className="detail-upsell__text">
               {subscription.row
-                ? '⚠ Your trial or subscription has expired. Subscribe to create new reports.'
-                : '⚠ A subscription is required to create reports.'}
+                ? 'Your trial or subscription has expired. Subscribe to create new reports.'
+                : 'A subscription is required to create reports.'}
             </span>
             <button
               id="subscribe-cta-btn"
-              style={styles.upsellBtn}
+              type="button"
+              className="detail-upsell__btn"
               onClick={() => navigate('/more')}
             >
               View Plans
@@ -173,62 +228,71 @@ export const ProjectDetailPage = () => {
           </div>
         )}
 
-        {/* New report CTA */}
-        <div style={styles.ctaArea}>
+        {/* New Daily Report CTA */}
+        <div className="detail-cta">
           <button
             id="new-report-btn"
-            style={{
-              ...styles.newReportBtn,
-              opacity: (creating || !subscription.entitled) ? 0.5 : 1,
-              cursor: !subscription.entitled ? 'not-allowed' : 'pointer',
-            }}
+            type="button"
+            className="detail-new-report-btn"
             onClick={handleNewReport}
             disabled={creating || !subscription.entitled}
             aria-disabled={!subscription.entitled}
           >
-            <IconPlus />
-            <span>{creating ? 'Creating…' : 'New Daily Report'}</span>
+            <PlusIcon size={20} />
+            <span>{creating ? 'Creating…' : '+ New Daily Report'}</span>
           </button>
           {createError && (
-            <p style={styles.createError} role="alert">{createError}</p>
+            <div className="detail-create-error" role="alert">{createError}</div>
           )}
         </div>
 
-        {/* Report history */}
-        <div style={styles.section}>
-          <h2 style={styles.sectionHeading}>Report History</h2>
+        {/* Recent Reports */}
+        <div className="detail-section">
+          <p className="detail-section-label" aria-label="Recent Reports">Recent Reports</p>
           {reports.length === 0 ? (
-            <div style={styles.emptyReports}>
-              <p style={styles.emptyText}>No reports yet. Create your first daily report above.</p>
+            <div className="detail-reports-empty">
+              <p className="detail-reports-empty__text">
+                No reports yet. Tap + New Daily Report above.
+              </p>
             </div>
           ) : (
-            <div style={styles.reportList}>
+            <ul className="detail-report-list" role="list">
               {reports.map((r) => (
-                <div
-                  key={r.id}
-                  style={styles.reportCard}
-                  onClick={() => navigate(`/update/${id}/new?reportId=${r.id}`)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') navigate(`/update/${id}/new?reportId=${r.id}`)
-                  }}
-                >
-                  <div style={styles.reportInfo}>
-                    <span style={styles.reportNumber}>Report #{r.report_number}</span>
-                    <span style={styles.reportDate}>
-                      {new Date(r.created_at).toLocaleDateString()}
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    className="detail-report-card"
+                    onClick={() => handleReportClick(r)}
+                    aria-label={
+                      `Report #${r.report_number}, ${r.is_draft ? 'Draft' : 'Final'}, ${formatDate(r.created_at)}`
+                    }
+                  >
+                    {/* Doc icon */}
+                    <span className="detail-report-icon" aria-hidden="true">
+                      <FileTextIcon size={18} />
                     </span>
-                  </div>
-                  <div style={styles.reportRight}>
-                    <span style={r.is_draft ? styles.badgeDraft : styles.badgeFinal}>
-                      {r.is_draft ? 'Draft' : 'Final'}
-                    </span>
-                    <IconChevron />
-                  </div>
-                </div>
+
+                    {/* Report info */}
+                    <div className="detail-report-info">
+                      <span className="detail-report-number">Report #{r.report_number}</span>
+                      <span className="detail-report-date">{formatDate(r.created_at)}</span>
+                    </div>
+
+                    {/* Right: badge + chevron */}
+                    <div className="detail-report-right">
+                      {/* Status conveyed textually via badge text and aria-label — not color alone */}
+                      <span
+                        className={`badge ${r.is_draft ? 'badge--draft' : 'badge--final'}`}
+                        aria-hidden="true"
+                      >
+                        {r.is_draft ? 'Draft' : 'Final'}
+                      </span>
+                      <ChevronRightIcon size={16} />
+                    </div>
+                  </button>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       </div>
@@ -236,154 +300,25 @@ export const ProjectDetailPage = () => {
   )
 }
 
-// Shared header for loading/error states
-function renderHeader(navigate: ReturnType<typeof useNavigate>) {
-  return (
-    <header style={styles.header}>
-      <button onClick={() => navigate('/projects')} style={styles.backBtn} aria-label="Back to projects">
-        <IconBack />
-      </button>
-      <h1 style={styles.heading}>Project</h1>
-    </header>
-  )
+// ── DetailHeader — shared across loading/error/main states ─────────────────
+
+interface DetailHeaderProps {
+  onBack: () => void
+  title: string
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    display: 'flex', flexDirection: 'column',
-    minHeight: '100dvh', background: 'var(--color-background)',
-  },
-  center: {
-    flex: 1, display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center',
-    padding: '24px', gap: '16px',
-  },
-  spinner: {
-    width: '30px', height: '30px',
-    border: '2.5px solid var(--color-border)',
-    borderTopColor: 'var(--color-primary)',
-    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-  },
-  loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
-  errorText:   { color: 'var(--color-danger)', fontSize: '15px', margin: 0 },
-  retryButton: {
-    minHeight: '48px', padding: '0 32px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-md)',
-    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
-  },
-  textLink: {
-    background: 'none', border: 'none',
-    color: 'var(--color-primary)', fontSize: '14px',
-    cursor: 'pointer', textDecoration: 'underline', padding: 0,
-  },
-  header: {
-    display: 'flex', alignItems: 'center', gap: '10px',
-    padding: '12px 20px',
-    paddingTop: 'max(12px, env(safe-area-inset-top))',
-    background: 'var(--color-surface)',
-    borderBottom: '1px solid var(--color-border)',
-  },
-  backBtn: {
-    width: '40px', height: '40px',
-    background: 'none', border: '1px solid var(--color-border)',
-    borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0, color: 'var(--color-text)',
-  },
-  heading: {
-    fontSize: '18px', fontWeight: 700,
-    color: 'var(--color-primary)', margin: 0,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    flex: 1,
-  },
-  metaCard: {
-    margin: '12px 16px 0',
-    background: 'var(--color-surface)',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--color-border)',
-    overflow: 'hidden',
-    boxShadow: 'var(--shadow-sm)',
-  },
-  metaRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '12px 16px', borderBottom: '1px solid var(--color-border)',
-    gap: '12px',
-  },
-  metaLabel: { fontSize: '13px', fontWeight: 500, color: 'var(--color-text-muted)', flexShrink: 0 },
-  metaValue: {
-    fontSize: '14px', color: 'var(--color-text)',
-    textAlign: 'right' as const, minWidth: 0,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
-  ctaArea: { padding: '16px 16px 0' },
-  upsellBanner: {
-    margin: '12px 16px 0',
-    padding: '12px 16px',
-    background: 'var(--color-warning-soft)',
-    border: '1px solid var(--color-warning)',
-    borderRadius: 'var(--radius-md)',
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: '12px', flexWrap: 'wrap' as const,
-  },
-  upsellText: {
-    fontSize: '13px', color: 'var(--color-text)', flex: 1,
-  },
-  upsellBtn: {
-    flexShrink: 0, minHeight: '36px', padding: '0 16px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-sm)',
-    fontSize: '14px', fontWeight: 600, cursor: 'pointer',
-  },
-  newReportBtn: {
-    width: '100%', minHeight: '52px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-md)',
-    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-    boxShadow: '0 2px 6px rgba(26,82,118,0.25)',
-  },
-  createError: {
-    color: 'var(--color-danger)', fontSize: '14px',
-    padding: '10px 14px', background: 'var(--color-danger-soft)',
-    borderRadius: 'var(--radius-sm)', margin: '10px 0 0',
-  },
-  section: { padding: '16px' },
-  sectionHeading: {
-    fontSize: '13px', fontWeight: 600, letterSpacing: '0.05em',
-    textTransform: 'uppercase' as const,
-    color: 'var(--color-text-muted)', margin: '0 0 8px',
-  },
-  emptyReports: {
-    padding: '28px 16px', border: '2px dashed var(--color-border)',
-    borderRadius: 'var(--radius-md)', textAlign: 'center',
-  },
-  emptyText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
-  reportList: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  reportCard: {
-    background: 'var(--color-surface)',
-    borderRadius: 'var(--radius-md)',
-    padding: '14px 16px',
-    border: '1px solid var(--color-border)',
-    display: 'flex', alignItems: 'center',
-    justifyContent: 'space-between',
-    cursor: 'pointer', gap: '12px',
-    boxShadow: 'var(--shadow-sm)',
-  },
-  reportInfo: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 },
-  reportNumber: { fontSize: '15px', fontWeight: 600, color: 'var(--color-text)' },
-  reportDate:   { fontSize: '12px', color: 'var(--color-text-muted)' },
-  reportRight: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, color: 'var(--color-text-muted)' },
-  badgeDraft: {
-    fontSize: '11px', fontWeight: 700,
-    color: 'var(--color-warning)', background: 'var(--color-warning-soft)',
-    padding: '3px 10px', borderRadius: '20px',
-  },
-  badgeFinal: {
-    fontSize: '11px', fontWeight: 700,
-    color: 'var(--color-success)', background: 'var(--color-success-soft)',
-    padding: '3px 10px', borderRadius: '20px',
-  },
+function DetailHeader({ onBack, title }: DetailHeaderProps) {
+  return (
+    <header className="detail-header">
+      <button
+        type="button"
+        className="detail-back-btn"
+        onClick={onBack}
+        aria-label="Back to projects"
+      >
+        <ChevronLeftIcon size={18} />
+      </button>
+      <h1 className="detail-heading">{title}</h1>
+    </header>
+  )
 }
