@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { getReport, updateReport, listPhotosForReport } from '../lib/reports'
@@ -6,6 +6,56 @@ import { saveDraft, loadDraft, clearDraft } from '../lib/draftRecovery'
 import { uploadPhoto } from '../lib/photoUpload'
 import { deletePhoto } from '../lib/photoDelete'
 import { supabase } from '../lib/supabase'
+import { ChevronLeftIcon, XIcon, CameraIcon } from '../components/icons'
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+interface PhotoSlot {
+  photoId: string
+  storagePath: string
+  thumbnailUrl: string
+  uploading?: boolean
+  deleting?: boolean
+  error?: string
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Format report date as "Mon, Sep 24, 2026" */
+function formatReportDate(isoString: string | null): string {
+  if (!isoString) return ''
+  return new Date(isoString).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+/** Auto-grow: set height to auto first so it can shrink, then to scrollHeight */
+function autoGrow(el: HTMLTextAreaElement) {
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+
+// ── Spinner (inline, small) ─────────────────────────────────────────────────
+const EditorSpinner = () => (
+  <span
+    style={{
+      display: 'inline-block',
+      width: 16,
+      height: 16,
+      border: '2px solid rgba(255,255,255,0.35)',
+      borderTopColor: '#fff',
+      borderRadius: '50%',
+      animation: 'spin 0.8s linear infinite',
+      flexShrink: 0,
+    }}
+    aria-hidden="true"
+  />
+)
+
+// ── CreateReportPage ────────────────────────────────────────────────────────
 
 export const CreateReportPage = () => {
   const { projectId } = useParams<{ projectId: string }>()
@@ -14,20 +64,13 @@ export const CreateReportPage = () => {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  interface PhotoSlot {
-    photoId: string
-    storagePath: string
-    thumbnailUrl: string
-    uploading?: boolean
-    deleting?: boolean
-    error?: string
-  }
   const [photos, setPhotos] = useState<PhotoSlot[]>([])
   const photoUrlsRef = useRef<Set<string>>(new Set())
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reportNumber, setReportNumber] = useState<number | null>(null)
+  const [reportCreatedAt, setReportCreatedAt] = useState<string | null>(null)
 
   const [workCompleted, setWorkCompleted] = useState('')
   const [problems, setProblems] = useState('')
@@ -46,14 +89,19 @@ export const CreateReportPage = () => {
   // Revision counter for stale-save protection
   const revisionRef = useRef(0)
 
-  // Redirect if no reportId in query string — never read from location.state
+  // Refs to textareas for auto-grow re-trigger on load
+  const workRef = useRef<HTMLTextAreaElement>(null)
+  const problemsRef = useRef<HTMLTextAreaElement>(null)
+  const nextStepsRef = useRef<HTMLTextAreaElement>(null)
+
+  // ── Guard: redirect if no reportId ────────────────────────────────────
   useEffect(() => {
     if (!reportId) {
       navigate(`/projects/${projectId}`, { replace: true })
     }
   }, [reportId, projectId, navigate])
 
-  // Load existing report
+  // ── Load existing report ───────────────────────────────────────────────
   const loadReport = useCallback(async () => {
     if (!reportId || !projectId) return
     setLoading(true)
@@ -66,13 +114,14 @@ export const CreateReportPage = () => {
         return
       }
       setReportNumber(report.report_number)
+      setReportCreatedAt(report.created_at)
       setWorkCompleted(report.work_completed ?? '')
       setProblems(report.problems ?? '')
       setNextSteps(report.next_steps ?? '')
       fieldsRef.current = {
         workCompleted: report.work_completed ?? '',
         problems: report.problems ?? '',
-        nextSteps: report.next_steps ?? ''
+        nextSteps: report.next_steps ?? '',
       }
 
       const existingPhotos = await listPhotosForReport(reportId)
@@ -115,24 +164,32 @@ export const CreateReportPage = () => {
 
   useEffect(() => { loadReport() }, [loadReport])
 
-  // Debounced save to Supabase
+  // Re-trigger auto-grow after initial load fills textareas
+  useEffect(() => {
+    if (!loading) {
+      if (workRef.current) autoGrow(workRef.current)
+      if (problemsRef.current) autoGrow(problemsRef.current)
+      if (nextStepsRef.current) autoGrow(nextStepsRef.current)
+    }
+  }, [loading])
+
+  // ── Autosave ───────────────────────────────────────────────────────────
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
-
-  // Save to IndexedDB (shorter debounce)
   const idbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const scheduleIdbSave = useCallback(() => {
     if (!reportId) return
     if (idbTimerRef.current) clearTimeout(idbTimerRef.current)
     idbTimerRef.current = setTimeout(() => {
-      const { workCompleted, problems, nextSteps } = fieldsRef.current
+      const { workCompleted: wc, problems: pr, nextSteps: ns } = fieldsRef.current
       saveDraft(reportId, {
-        work_completed: workCompleted,
-        problems,
-        next_steps: nextSteps,
+        work_completed: wc,
+        problems: pr,
+        next_steps: ns,
         revision: revisionRef.current,
         savedAt: Date.now(),
-      }).catch(() => { /* IndexedDB save is best-effort */ })
+      }).catch(() => { /* IDB save is best-effort */ })
     }, 500)
   }, [reportId])
 
@@ -142,14 +199,14 @@ export const CreateReportPage = () => {
     dirtyRef.current = false
     setSaving(true)
 
-    const { workCompleted, problems, nextSteps } = fieldsRef.current
+    const { workCompleted: wc, problems: pr, nextSteps: ns } = fieldsRef.current
 
     // Immediate IDB save
     try {
       await saveDraft(reportId, {
-        work_completed: workCompleted,
-        problems,
-        next_steps: nextSteps,
+        work_completed: wc,
+        problems: pr,
+        next_steps: ns,
         revision: capturedRevision,
         savedAt: Date.now(),
       })
@@ -157,18 +214,17 @@ export const CreateReportPage = () => {
 
     try {
       const result = await updateReport(reportId, {
-        work_completed: workCompleted,
-        problems,
-        next_steps: nextSteps,
+        work_completed: wc,
+        problems: pr,
+        next_steps: ns,
       })
-      // Only update lastSaved and clear IDB if revision hasn't advanced
+      // Only update lastSaved if revision hasn't advanced
       if (capturedRevision === revisionRef.current) {
         setLastSaved(new Date(result.updated_at).toLocaleTimeString())
         setSaveError(null)
         clearDraft(reportId).catch(() => {})
       }
     } catch {
-      // Show a visible warning — autosave failure is non-blocking but not silent
       setSaveError('Not saved — check your connection')
     } finally {
       setSaving(false)
@@ -183,7 +239,7 @@ export const CreateReportPage = () => {
     scheduleIdbSave()
   }, [flushSave, scheduleIdbSave])
 
-  // Flush on blur and visibility change
+  // Flush on visibility change / pagehide
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') flushSave()
@@ -207,17 +263,25 @@ export const CreateReportPage = () => {
     return () => clearInterval(interval)
   }, [flushSave])
 
+  // ── Recovery handlers ──────────────────────────────────────────────────
   const handleRecoverDraft = () => {
     if (recoveredDraftRef.current) {
-      setWorkCompleted(recoveredDraftRef.current.work_completed)
-      setProblems(recoveredDraftRef.current.problems)
-      setNextSteps(recoveredDraftRef.current.next_steps)
+      const d = recoveredDraftRef.current
+      setWorkCompleted(d.work_completed)
+      setProblems(d.problems)
+      setNextSteps(d.next_steps)
       fieldsRef.current = {
-        workCompleted: recoveredDraftRef.current.work_completed,
-        problems: recoveredDraftRef.current.problems,
-        nextSteps: recoveredDraftRef.current.next_steps
+        workCompleted: d.work_completed,
+        problems: d.problems,
+        nextSteps: d.next_steps,
       }
       recoveredDraftRef.current = null
+      // Re-trigger auto-grow after restoring content
+      setTimeout(() => {
+        if (workRef.current) autoGrow(workRef.current)
+        if (problemsRef.current) autoGrow(problemsRef.current)
+        if (nextStepsRef.current) autoGrow(nextStepsRef.current)
+      }, 0)
     }
     setRecoveryBanner(false)
   }
@@ -228,7 +292,7 @@ export const CreateReportPage = () => {
     if (reportId) clearDraft(reportId).catch(() => {})
   }
 
-  // --- Photo handlers ---
+  // ── Photo handlers ─────────────────────────────────────────────────────
 
   const handlePhotoSelect = async (files: FileList | null) => {
     if (!files || files.length === 0 || !user || !reportId) return
@@ -265,7 +329,7 @@ export const CreateReportPage = () => {
     if (!photo || photo.uploading || photo.deleting) return
 
     if (!photo.storagePath) {
-      // Failed upload or error slot - remove immediately
+      // Failed upload slot — remove immediately
       if (photo.thumbnailUrl) {
         URL.revokeObjectURL(photo.thumbnailUrl)
         photoUrlsRef.current.delete(photo.thumbnailUrl)
@@ -297,17 +361,18 @@ export const CreateReportPage = () => {
     }
   }, [])
 
+  // ── Finalization ───────────────────────────────────────────────────────
   const handleDone = async () => {
     if (!reportId || finishing) return
     setFinishing(true)
     setFinishError(null)
     try {
-      const { workCompleted, problems, nextSteps } = fieldsRef.current
+      const { workCompleted: wc, problems: pr, nextSteps: ns } = fieldsRef.current
       // Flush latest snapshot and mark final in a single server call
       await updateReport(reportId, {
-        work_completed: workCompleted,
-        problems,
-        next_steps: nextSteps,
+        work_completed: wc,
+        problems: pr,
+        next_steps: ns,
         is_draft: false,
       })
       // Clear IndexedDB draft on confirmed finalization
@@ -315,7 +380,6 @@ export const CreateReportPage = () => {
       // Navigate to preview only after server confirmation
       navigate(`/preview/${reportId}`)
     } catch {
-      // Keep editor intact — show inline error, not a page replacement
       setFinishError('Could not finalize report. Check your connection and try again.')
     } finally {
       setFinishing(false)
@@ -324,190 +388,290 @@ export const CreateReportPage = () => {
 
   if (!reportId) return null
 
+  // ── Save status label / class ──────────────────────────────────────────
+  const saveStatusClass = saving
+    ? 'editor-save-status editor-save-status--saving'
+    : saveError
+      ? 'editor-save-status editor-save-status--error'
+      : lastSaved
+        ? 'editor-save-status editor-save-status--saved'
+        : 'editor-save-status'
+
+  const saveStatusText = saving
+    ? 'Saving…'
+    : saveError
+      ? saveError
+      : lastSaved
+        ? `Saved ${lastSaved}`
+        : ''
+
+  // ── Loading state ──────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div style={styles.page}>
-        <div style={styles.center}>
-          <div style={styles.spinner} />
-          <p style={styles.loadingText}>Loading report…</p>
+      <div className="editor-page">
+        <div className="editor-center" aria-label="Loading report" aria-busy="true">
+          <div
+            style={{
+              width: 28, height: 28,
+              border: '2.5px solid var(--color-border)',
+              borderTopColor: 'var(--color-primary)',
+              borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite',
+            }}
+            aria-hidden="true"
+          />
+          <p style={{ color: 'var(--color-text-muted)', fontSize: 14, margin: 0 }}>
+            Loading report…
+          </p>
         </div>
       </div>
     )
   }
 
+  // ── Error state ────────────────────────────────────────────────────────
   if (error) {
     return (
-      <div style={styles.page}>
-        <div style={styles.center}>
-          <p style={styles.errorText}>{error}</p>
-          <button onClick={() => loadReport()} style={styles.retryButton}>Retry</button>
-          <button onClick={() => navigate(`/projects/${projectId}`)} style={styles.backLink}>← Back to Project</button>
+      <div className="editor-page">
+        <div className="editor-center">
+          <p className="editor-error-text">{error}</p>
+          <button type="button" onClick={() => loadReport()} className="editor-retry-btn">
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/projects/${projectId}`)}
+            className="editor-back-link"
+          >
+            ← Back to Project
+          </button>
         </div>
       </div>
     )
   }
 
+  // ── Main editor ────────────────────────────────────────────────────────
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
+    <div className="editor-page">
+
+      {/* Sticky header */}
+      <header className="editor-header">
         <button
+          type="button"
+          className="editor-header__back"
           onClick={() => { flushSave(); navigate(`/projects/${projectId}`) }}
-          style={styles.backBtn}
           aria-label="Back to project"
         >
-          ←
+          <ChevronLeftIcon size={18} />
         </button>
-        <h1 style={styles.heading}>
-          Report #{reportNumber}
-        </h1>
-        <div style={saving ? styles.saveStatus : saveError ? styles.saveError : styles.saveStatus}>
-          {saving ? 'Saving…' : saveError ? `⚠ ${saveError}` : lastSaved ? `Saved ${lastSaved}` : ''}
+
+        <div className="editor-header__title-block">
+          <h1 className="editor-header__report-num">
+            Report #{reportNumber}
+          </h1>
+          {reportCreatedAt && (
+            <span className="editor-header__date">
+              {formatReportDate(reportCreatedAt)}
+            </span>
+          )}
+        </div>
+
+        <div className={saveStatusClass} aria-live="polite" aria-atomic="true">
+          {saveStatusText}
         </div>
       </header>
 
+      {/* Recovery banner — no emoji */}
       {recoveryBanner && (
-        <div style={styles.recoveryBanner}>
-          <span>📝 Unsaved draft recovered.</span>
-          <div style={styles.recoveryActions}>
-            <button onClick={handleRecoverDraft} style={styles.recoveryRestore}>Restore</button>
-            <button onClick={handleDismissRecovery} style={styles.recoveryDismiss}>Dismiss</button>
+        <div className="editor-recovery" role="alert">
+          <span className="editor-recovery__text">Unsaved draft recovered.</span>
+          <div className="editor-recovery__actions">
+            <button
+              type="button"
+              className="editor-recovery__restore"
+              onClick={handleRecoverDraft}
+            >
+              Restore
+            </button>
+            <button
+              type="button"
+              className="editor-recovery__dismiss"
+              onClick={handleDismissRecovery}
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}
 
-      <div style={styles.editorBody}>
-        <label style={styles.label}>
-          Work Completed
+      {/* Editor body — divider-led sections, no card soup */}
+      <div className="editor-body">
+
+        {/* Work Completed */}
+        <div className="editor-section">
+          <label htmlFor="report-work-completed" className="editor-section__label">
+            Work Completed
+          </label>
           <textarea
+            ref={workRef}
             id="report-work-completed"
+            className="textarea-autogrow"
             value={workCompleted}
-            onChange={(e) => { setWorkCompleted(e.target.value); fieldsRef.current.workCompleted = e.target.value; scheduleSave() }}
+            placeholder="e.g. Framing, rough plumbing completed — crew of 4"
+            onInput={(e) => autoGrow(e.currentTarget)}
+            onChange={(e) => {
+              setWorkCompleted(e.target.value)
+              fieldsRef.current.workCompleted = e.target.value
+              scheduleSave()
+            }}
             onBlur={() => flushSave()}
-            placeholder="Describe work completed today…"
-            style={styles.textarea}
-            rows={4}
           />
-        </label>
+        </div>
 
-        <label style={styles.label}>
-          Problems
+        {/* Problems */}
+        <div className="editor-section">
+          <label htmlFor="report-problems" className="editor-section__label">
+            Problems / Delays
+          </label>
           <textarea
+            ref={problemsRef}
             id="report-problems"
+            className="textarea-autogrow"
             value={problems}
-            onChange={(e) => { setProblems(e.target.value); fieldsRef.current.problems = e.target.value; scheduleSave() }}
+            placeholder="e.g. Material delivery delayed, weather hold"
+            onInput={(e) => autoGrow(e.currentTarget)}
+            onChange={(e) => {
+              setProblems(e.target.value)
+              fieldsRef.current.problems = e.target.value
+              scheduleSave()
+            }}
             onBlur={() => flushSave()}
-            placeholder="Any issues or blockers…"
-            style={styles.textarea}
-            rows={4}
           />
-        </label>
+        </div>
 
-        <label style={styles.label}>
-          Next Steps
+        {/* Next Steps */}
+        <div className="editor-section">
+          <label htmlFor="report-next-steps" className="editor-section__label">
+            Next Steps
+          </label>
           <textarea
+            ref={nextStepsRef}
             id="report-next-steps"
+            className="textarea-autogrow"
             value={nextSteps}
-            onChange={(e) => { setNextSteps(e.target.value); fieldsRef.current.nextSteps = e.target.value; scheduleSave() }}
+            placeholder="e.g. Electrical rough-in Monday, inspector call Tuesday"
+            onInput={(e) => autoGrow(e.currentTarget)}
+            onChange={(e) => {
+              setNextSteps(e.target.value)
+              fieldsRef.current.nextSteps = e.target.value
+              scheduleSave()
+            }}
             onBlur={() => flushSave()}
-            placeholder="What happens next…"
-            style={styles.textarea}
-            rows={4}
           />
-        </label>
+        </div>
 
-        {/* Photo section */}
-        <div style={styles.photoSection}>
-          <h3 style={styles.photoHeading}>Photos ({photos.length}/10)</h3>
-          <div style={styles.photoGrid}>
+        {/* Photos — last section, no border-bottom */}
+        <div className="editor-section" style={{ borderBottom: 'none', marginBottom: 0 }}>
+          <span className="editor-section__label">
+            Photos ({photos.length}/10)
+          </span>
+
+          <div className="photo-grid" role="list" aria-label="Report photos">
             {photos.map((p, i) => (
-              <div key={p.photoId} style={styles.photoSlot}>
+              <div key={p.photoId} className="photo-slot" role="listitem">
                 {p.uploading ? (
-                  <div style={styles.photoUploading}><div style={styles.spinner} /></div>
+                  <div className="photo-slot--uploading" aria-label="Uploading photo">
+                    <div
+                      style={{
+                        width: 24, height: 24,
+                        border: '2.5px solid var(--color-border)',
+                        borderTopColor: 'var(--color-primary)',
+                        borderRadius: '50%',
+                        animation: 'spin 0.8s linear infinite',
+                      }}
+                      aria-hidden="true"
+                    />
+                  </div>
                 ) : p.error ? (
-                  <div style={styles.photoError}>{p.error}</div>
+                  <div className="photo-slot--error" role="alert">
+                    {p.error}
+                  </div>
                 ) : (
-                  <img src={p.thumbnailUrl} alt={`Photo ${i + 1}`} style={styles.photoThumb} />
+                  <img
+                    src={p.thumbnailUrl}
+                    alt={`Site photo ${i + 1}`}
+                    className="photo-slot__img"
+                  />
                 )}
+
+                {/* Delete button: 44×44 transparent hit area, 28×28 visible circle inside */}
                 <button
+                  type="button"
+                  className="photo-delete-btn"
                   onClick={() => handleDeletePhoto(i)}
                   disabled={p.deleting}
-                  style={{...styles.photoDeleteBtn, opacity: p.deleting ? 0.5 : 1}}
                   aria-label={`Delete photo ${i + 1}`}
                 >
-                  ✕
+                  <span className="photo-delete-visual" aria-hidden="true">
+                    <XIcon size={14} />
+                  </span>
                 </button>
               </div>
             ))}
+
+            {/* Add Photo slot */}
             {photos.length < 10 && (
-              <label style={styles.photoAddSlot}>
+              <label className="photo-add-slot" aria-label="Add photo">
                 <input
                   type="file"
                   accept="image/*"
                   onChange={(e) => handlePhotoSelect(e.target.files)}
                   style={{ display: 'none' }}
                 />
-                <span style={styles.photoAddIcon}>+</span>
-                <span style={styles.photoAddLabel}>Add Photo</span>
+                <CameraIcon size={24} />
+                <span className="photo-add-slot__label">Add Photo</span>
               </label>
             )}
           </div>
         </div>
 
-        {/* Finalization error — shown in editor, never replaces the page */}
-        {finishError && (
-          <div style={styles.finishError} role="alert">
-            {finishError}
-            <button onClick={handleDone} disabled={finishing} style={styles.finishRetryBtn}>
-              Retry
-            </button>
-          </div>
-        )}
+      </div>{/* /editor-body */}
 
+      {/* Finalization error — sits just above the sticky action bar */}
+      {finishError && (
+        <div className="editor-finish-error" role="alert">
+          <span>{finishError}</span>
+          <button
+            type="button"
+            className="editor-finish-error__retry"
+            onClick={handleDone}
+            disabled={finishing}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Sticky bottom action bar */}
+      <div className="editor-action-bar">
         <button
           id="report-done-btn"
+          type="button"
+          className="editor-finalize-btn"
           onClick={handleDone}
           disabled={finishing}
-          style={{ ...styles.doneBtn, opacity: finishing ? 0.6 : 1 }}
+          aria-disabled={finishing}
         >
-          {finishing ? 'Finalizing…' : 'Done — Mark as Final'}
+          {finishing ? (
+            <>
+              <EditorSpinner />
+              <span>Finalizing…</span>
+            </>
+          ) : (
+            <span>Mark as Final</span>
+          )}
         </button>
       </div>
+
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  page: { minHeight: '100dvh', background: 'var(--color-background)', display: 'flex', flexDirection: 'column' },
-  center: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', gap: '16px' },
-  spinner: { width: '28px', height: '28px', border: '2.5px solid var(--color-border)', borderTopColor: 'var(--color-primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
-  loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
-  errorText: { color: 'var(--color-danger)', fontSize: '15px', margin: 0, textAlign: 'center' },
-  retryButton: { minHeight: '48px', padding: '0 32px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', fontSize: '16px', fontWeight: 600, cursor: 'pointer' },
-  backLink: { background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: '14px', cursor: 'pointer', textDecoration: 'underline', padding: 0 },
-  header: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', paddingTop: 'max(12px, env(safe-area-inset-top))', background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' },
-  backBtn: { width: '40px', height: '40px', background: 'none', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--color-text)' },
-  heading: { fontSize: '17px', fontWeight: 700, color: 'var(--color-primary)', margin: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  saveStatus: { fontSize: '12px', color: 'var(--color-text-muted)', flexShrink: 0 },
-  saveError: { fontSize: '12px', color: 'var(--color-danger)', flexShrink: 0, fontWeight: 600 },
-  editorBody: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
-  label: { display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px', fontWeight: 600, color: 'var(--color-text-muted)' },
-  textarea: { padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', fontSize: '16px', fontFamily: 'var(--font-sans)', resize: 'vertical' as const, outline: 'none', minHeight: '96px', background: 'var(--color-surface)', color: 'var(--color-text)' },
-  photoSection: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  photoHeading: { fontSize: '13px', fontWeight: 600, color: 'var(--color-text-muted)', margin: 0 },
-  photoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px' },
-  photoSlot: { position: 'relative', aspectRatio: '1', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--color-border)', background: 'var(--color-surface)' },
-  photoThumb: { width: '100%', height: '100%', objectFit: 'cover' },
-  photoUploading: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-background)' },
-  photoError: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-danger-soft)', color: 'var(--color-danger)', fontSize: '11px', padding: '4px', textAlign: 'center' },
-  photoDeleteBtn: { position: 'absolute', top: '3px', right: '3px', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(0,0,0,0.55)', color: '#fff', border: 'none', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  photoAddSlot: { aspectRatio: '1', borderRadius: 'var(--radius-sm)', border: '2px dashed var(--color-border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer', background: 'var(--color-background)' },
-  photoAddIcon: { fontSize: '22px', color: 'var(--color-text-muted)' },
-  photoAddLabel: { fontSize: '11px', color: 'var(--color-text-muted)' },
-  finishError: { padding: '12px 14px', background: 'var(--color-danger-soft)', border: '1px solid var(--color-danger)', borderRadius: 'var(--radius-sm)', color: 'var(--color-danger)', fontSize: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' },
-  finishRetryBtn: { padding: '6px 14px', background: 'var(--color-danger)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 },
-  doneBtn: { minHeight: '52px', background: 'var(--color-success)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', fontSize: '16px', fontWeight: 600, cursor: 'pointer' },
-  recoveryBanner: { margin: '8px 16px 0', padding: '12px 16px', background: 'var(--color-warning-soft)', border: '1px solid #FCD34D', borderRadius: 'var(--radius-sm)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '14px', color: 'var(--color-warning)', gap: '8px' },
-  recoveryActions: { display: 'flex', gap: '8px', flexShrink: 0 },
-  recoveryRestore: { padding: '6px 14px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
-  recoveryDismiss: { padding: '6px 14px', background: 'none', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '13px', cursor: 'pointer' },
 }

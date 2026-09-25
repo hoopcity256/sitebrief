@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -103,6 +103,7 @@ export type Database = {
       projects: {
         Row: {
           address: string
+          cover_photo_path: string | null
           created_at: string
           customer_email: string | null
           customer_name: string
@@ -115,6 +116,7 @@ export type Database = {
         }
         Insert: {
           address: string
+          cover_photo_path?: string | null
           created_at?: string
           customer_email?: string | null
           customer_name: string
@@ -127,6 +129,7 @@ export type Database = {
         }
         Update: {
           address?: string
+          cover_photo_path?: string | null
           created_at?: string
           customer_email?: string | null
           customer_name?: string

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useCompanyProfile } from '../hooks/useCompanyProfile'
@@ -12,7 +12,9 @@ import { AppShell } from '../components/AppShell'
 const MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_MONTHLY_PRICE_ID as string | undefined
 const ANNUAL_PRICE_ID  = import.meta.env.VITE_STRIPE_ANNUAL_PRICE_ID  as string | undefined
 
-// ── SubscriptionSection ────────────────────────────────────────────────────
+// ── SubscriptionSection ──────────────────────────────────────────────────────
+// NOTE: All billing logic in this component is preserved VERBATIM.
+// Only the JSX markup is updated to use CSS classes instead of inline styles.
 
 interface SubscriptionSectionProps {
   onPortalError: (msg: string) => void
@@ -25,9 +27,9 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
 
   if (loading) {
     return (
-      <div style={styles.card}>
-        <div style={{ ...styles.cardRow, borderBottom: 'none', justifyContent: 'center' }}>
-          <div style={styles.spinner} />
+      <div className="more-card">
+        <div className="more-row" style={{ borderBottom: 'none', justifyContent: 'center' }}>
+          <div className="more-spinner" role="status" aria-label="Loading subscription" />
         </div>
       </div>
     )
@@ -67,19 +69,19 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
   // ── No subscription row yet → show upgrade options ─────────────────────
   if (!row) {
     return (
-      <div style={styles.card}>
-        <div style={styles.cardRow}>
-          <span style={styles.rowLabel}>Status</span>
-          <span style={styles.badgeExpired}>No active plan</span>
+      <div className="more-card">
+        <div className="more-row">
+          <span className="more-row__label">Status</span>
+          <span className="more-badge-expired">No active plan</span>
         </div>
-        <div style={{ ...styles.cardRow, borderBottom: 'none', flexDirection: 'column', gap: '10px' }}>
-          <p style={styles.upgradeNote}>
+        <div className="more-row" style={{ borderBottom: 'none', flexDirection: 'column', gap: '10px', alignItems: 'flex-start' }}>
+          <p className="more-upgrade-note">
             Start a 14-day free trial — no charge until the trial ends.
           </p>
-          <div style={styles.planRow}>
+          <div className="more-plan-row">
             <button
               id="subscribe-monthly-btn"
-              style={{ ...styles.planBtn, opacity: checkoutLoading ? 0.6 : 1 }}
+              className="more-plan-btn"
               disabled={!!checkoutLoading}
               onClick={() => handleCheckout('monthly')}
             >
@@ -87,7 +89,8 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
             </button>
             <button
               id="subscribe-annual-btn"
-              style={{ ...styles.planBtn, background: 'var(--color-success)', opacity: checkoutLoading ? 0.6 : 1 }}
+              className="more-plan-btn"
+              style={{ background: 'var(--color-success)' }}
               disabled={!!checkoutLoading}
               onClick={() => handleCheckout('annual')}
             >
@@ -120,39 +123,38 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
     })
   })()
 
-  const badge = entitled
-    ? isTrialing ? styles.badgeTrial : styles.badgeActive
-    : styles.badgeExpired
+  const badgeClass = entitled
+    ? isTrialing ? 'more-badge-trial' : 'more-badge-active'
+    : 'more-badge-expired'
 
   return (
-    <div style={styles.card}>
-      <div style={styles.cardRow}>
-        <span style={styles.rowLabel}>Status</span>
-        <span style={badge}>{statusLabel}</span>
+    <div className="more-card">
+      <div className="more-row">
+        <span className="more-row__label">Status</span>
+        <span className={badgeClass}>{statusLabel}</span>
       </div>
 
       {/* Cancellation Notice if cancel_at_period_end is scheduled */}
       {entitled && cancelAtPeriodEnd && (
-        <div style={{ ...styles.cardRow, flexDirection: 'column', gap: '6px', alignItems: 'flex-start', background: 'rgba(230,81,0,0.06)' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--color-warning, #E65100)' }}>
-            Automatic renewal canceled
-          </span>
-          <p style={styles.upgradeNote}>
-            Your {isTrialing ? 'trial' : 'subscription'} will end on {endDateFormatted ?? 'the end of period'}. Access remains active until then.
+        <div className="more-cancel-notice">
+          <p className="more-cancel-title">Automatic renewal canceled</p>
+          <p className="more-cancel-body">
+            Your {isTrialing ? 'trial' : 'subscription'} will end on{' '}
+            {endDateFormatted ?? 'the end of period'}. Access remains active until then.
           </p>
         </div>
       )}
 
       {/* Upsell if expired */}
       {!entitled && (
-        <div style={{ ...styles.cardRow, flexDirection: 'column', gap: '10px' }}>
-          <p style={styles.upgradeNote}>
+        <div className="more-row" style={{ flexDirection: 'column', gap: '10px', alignItems: 'flex-start' }}>
+          <p className="more-upgrade-note">
             Your subscription has lapsed. Subscribe to continue creating reports.
           </p>
-          <div style={styles.planRow}>
+          <div className="more-plan-row">
             <button
               id="resubscribe-monthly-btn"
-              style={{ ...styles.planBtn, opacity: checkoutLoading ? 0.6 : 1 }}
+              className="more-plan-btn"
               disabled={!!checkoutLoading}
               onClick={() => handleCheckout('monthly')}
             >
@@ -160,7 +162,8 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
             </button>
             <button
               id="resubscribe-annual-btn"
-              style={{ ...styles.planBtn, background: 'var(--color-success)', opacity: checkoutLoading ? 0.6 : 1 }}
+              className="more-plan-btn"
+              style={{ background: 'var(--color-success)' }}
               disabled={!!checkoutLoading}
               onClick={() => handleCheckout('annual')}
             >
@@ -172,11 +175,11 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
 
       {/* Manage subscription via Stripe Portal */}
       {entitled && (
-        <div style={{ ...styles.cardRow, borderBottom: 'none' }}>
-          <span style={styles.rowLabel}>Billing</span>
+        <div className="more-row" style={{ borderBottom: 'none' }}>
+          <span className="more-row__label">Billing</span>
           <button
             id="manage-subscription-btn"
-            style={{ ...styles.manageBtn, opacity: portalLoading ? 0.6 : 1 }}
+            className="more-manage-btn"
             disabled={portalLoading}
             onClick={handlePortal}
           >
@@ -188,7 +191,7 @@ const SubscriptionSection = ({ onPortalError }: SubscriptionSectionProps) => {
   )
 }
 
-// ── MorePage ───────────────────────────────────────────────────────────────
+// ── MorePage ─────────────────────────────────────────────────────────────────
 
 export const MorePage = () => {
   const { user } = useAuth()
@@ -213,26 +216,26 @@ export const MorePage = () => {
 
   return (
     <AppShell activeTab="more">
-      <div style={styles.page}>
+      <div className="more-page">
         {/* ── Header ── */}
-        <header style={styles.header}>
-          <h1 style={styles.heading}>More</h1>
+        <header className="more-header">
+          <h1 className="more-heading">More</h1>
         </header>
 
-        <div style={styles.body}>
+        <div className="more-body">
           {/* ── Account section ── */}
-          <section aria-labelledby="account-heading">
-            <p id="account-heading" style={styles.sectionLabel}>Account</p>
-            <div style={styles.card}>
-              <div style={styles.cardRow}>
-                <span style={styles.rowLabel}>Company</span>
-                <span style={styles.rowValue}>
+          <section className="more-section" aria-labelledby="account-heading">
+            <p id="account-heading" className="more-section-label">Account</p>
+            <div className="more-card">
+              <div className="more-row">
+                <span className="more-row__label">Company</span>
+                <span className="more-row__value">
                   {profileLoading ? '…' : (profile?.company_name ?? '—')}
                 </span>
               </div>
-              <div style={{ ...styles.cardRow, borderBottom: 'none' }}>
-                <span style={styles.rowLabel}>Email</span>
-                <span style={styles.rowValue}>
+              <div className="more-row" style={{ borderBottom: 'none' }}>
+                <span className="more-row__label">Email</span>
+                <span className="more-row__value">
                   {user?.email ?? '—'}
                 </span>
               </div>
@@ -240,10 +243,10 @@ export const MorePage = () => {
           </section>
 
           {/* ── Billing section ── */}
-          <section aria-labelledby="billing-heading">
-            <p id="billing-heading" style={styles.sectionLabel}>Subscription</p>
+          <section className="more-section" aria-labelledby="billing-heading">
+            <p id="billing-heading" className="more-section-label">Subscription</p>
             {billingError && (
-              <p style={styles.errorText} role="alert">{billingError}</p>
+              <p className="more-error" role="alert">{billingError}</p>
             )}
             <SubscriptionSection onPortalError={setBillingError} />
           </section>
@@ -251,13 +254,14 @@ export const MorePage = () => {
           {/* ── Sign out ── */}
           <section style={{ marginTop: '8px' }}>
             {signOutError && (
-              <p style={styles.errorText} role="alert">{signOutError}</p>
+              <p className="more-error" role="alert">{signOutError}</p>
             )}
             <button
               id="sign-out-btn"
+              type="button"
               onClick={handleSignOut}
               disabled={signingOut}
-              style={{ ...styles.signOutBtn, opacity: signingOut ? 0.6 : 1 }}
+              className="more-sign-out-btn"
             >
               {signingOut ? 'Signing out…' : 'Sign Out'}
             </button>
@@ -266,134 +270,4 @@ export const MorePage = () => {
       </div>
     </AppShell>
   )
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: '100dvh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--color-background)',
-  },
-  header: {
-    padding: '16px 20px 12px',
-    paddingTop: 'max(16px, env(safe-area-inset-top))',
-    background: 'var(--color-surface)',
-    borderBottom: '1px solid var(--color-border)',
-  },
-  heading: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: 'var(--color-primary)',
-    margin: 0,
-  },
-  body: {
-    padding: '20px 16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '20px',
-    flex: 1,
-  },
-  sectionLabel: {
-    fontSize: '11px',
-    fontWeight: 600,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase' as const,
-    color: 'var(--color-text-muted)',
-    margin: '0 0 6px 4px',
-  },
-  card: {
-    background: 'var(--color-surface)',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--color-border)',
-    overflow: 'hidden',
-  },
-  cardRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '14px 16px',
-    borderBottom: '1px solid var(--color-border)',
-    gap: '12px',
-  },
-  rowLabel: {
-    fontSize: '15px',
-    color: 'var(--color-text)',
-    flexShrink: 0,
-  },
-  rowValue: {
-    fontSize: '15px',
-    color: 'var(--color-text-muted)',
-    textAlign: 'right' as const,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap' as const,
-    minWidth: 0,
-  },
-  badgeActive: {
-    fontSize: '12px', fontWeight: 700,
-    color: 'var(--color-success)', background: 'var(--color-success-soft)',
-    padding: '3px 10px', borderRadius: '20px', flexShrink: 0,
-  },
-  badgeTrial: {
-    fontSize: '12px', fontWeight: 700,
-    color: 'var(--color-primary)', background: 'rgba(26,82,118,0.1)',
-    padding: '3px 10px', borderRadius: '20px', flexShrink: 0,
-  },
-  badgeExpired: {
-    fontSize: '12px', fontWeight: 700,
-    color: 'var(--color-danger)', background: 'var(--color-danger-soft)',
-    padding: '3px 10px', borderRadius: '20px', flexShrink: 0,
-  },
-  upgradeNote: {
-    fontSize: '13px', color: 'var(--color-text-muted)',
-    margin: 0, lineHeight: 1.5,
-  },
-  planRow: {
-    display: 'flex', gap: '8px', flexWrap: 'wrap' as const,
-    width: '100%',
-  },
-  planBtn: {
-    flex: 1, minHeight: '44px', padding: '0 12px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-sm)',
-    fontSize: '14px', fontWeight: 600, cursor: 'pointer',
-    transition: 'opacity 0.15s',
-  },
-  manageBtn: {
-    minHeight: '36px', padding: '0 16px',
-    background: 'transparent', color: 'var(--color-primary)',
-    border: '1px solid var(--color-primary)',
-    borderRadius: 'var(--radius-sm)',
-    fontSize: '14px', fontWeight: 600, cursor: 'pointer',
-    transition: 'opacity 0.15s',
-  },
-  spinner: {
-    width: '20px', height: '20px',
-    border: '2px solid var(--color-border)',
-    borderTopColor: 'var(--color-primary)',
-    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-  },
-  errorText: {
-    color: 'var(--color-danger)',
-    fontSize: '14px',
-    background: 'var(--color-danger-soft)',
-    padding: '10px 14px',
-    borderRadius: 'var(--radius-sm)',
-    margin: '0 0 10px',
-  },
-  signOutBtn: {
-    width: '100%',
-    minHeight: '48px',
-    background: 'var(--color-surface)',
-    color: 'var(--color-danger)',
-    border: '1px solid var(--color-border)',
-    borderRadius: 'var(--radius-md)',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'background 0.15s',
-  },
 }
