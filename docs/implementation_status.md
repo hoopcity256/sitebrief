@@ -10,9 +10,9 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ---
 
-## Accepted Baseline Before CP3 Commit
+## Accepted Baseline Before CP4 Commit
 
-`08035d8  docs: preserve SiteBrief design specification`
+`4a00b78  feat(ui): redesign auth and onboarding`
 Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
@@ -25,49 +25,55 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | CP1 | `c04029d` | Design system foundation |
 | CP2 | `8304967` | AppShell / Navigation (useLocation authoritative) |
 | Docs | `08035d8` | Design spec restored to docs/final_design_spec.md |
-| CP3 | _(see log after commit)_ | Auth + Onboarding — **APPROVED FOR COMMIT** |
+| CP3 | `4a00b78` | Auth + Onboarding redesign |
+| CP4 | _(see log after commit)_ | Projects experience — **APPROVED FOR COMMIT** |
 
 ---
 
-## CP3 Quality Gate
+## CP4 Quality Gate
 
 | Gate | Result |
 |------|--------|
+| `git diff --check` | ✅ Clean |
 | `npm test -- --run` | ✅ 37/37 passing (9 files) |
 | `npx tsc --noEmit` | ✅ Clean |
 | `npm run build` | ✅ Clean |
 
 ---
 
-## CP3 Changes (committed)
+## CP4 Changes (committed)
 
-- `src/index.css` — 240 lines of auth/onboarding CSS classes; all tokens; no hardcoded hex
-- `src/components/AuthLayout.tsx` — inline styles → CSS classes
-- `src/pages/LoginPage.tsx` — CSS classes; SVG eye icons; explicit label associations
-- `src/pages/SignUpPage.tsx` — CSS classes; SVG eye icons; explicit label associations
-- `src/pages/PasswordResetPage.tsx` — CSS classes; explicit label associations
-- `src/pages/UpdatePasswordPage.tsx` — CSS classes; SVG eye icons; explicit label associations
-- `src/pages/OnboardingPage.tsx` — CSS classes; brand-color helper text; camera SVG
+- `src/pages/ProjectsPage.tsx` — full redesign: SiteBrief wordmark mobile header (hidden on desktop), 48×48 FAB, semantic `<button>` card body for navigation, `BuildingIcon` anchor, typography hierarchy, three-dot menu with archive action, skeleton loaders, polished empty state with CTA, error state, explicit label/id form associations, all existing CRUD logic preserved
+- `src/index.css` — +483 lines of projects CSS classes (additive; no existing classes changed)
+- `src/components/icons.tsx` — `ArchiveIcon` added to shared icon library
+- Interaction defect fixed: `onBlur` for menu close moved from `.project-card__menu-zone` (which did not contain the popover) to the outer `.project-card-wrap` — prevents premature menu close when focus moves from the ellipsis button to the archive button
 
-All Supabase auth calls, redirect logic, validation rules, and onboarding writes preserved unchanged.
+---
+
+## CP4 Deferred
+
+- **Report count / last-report-date**: not exposed by `listProjects` (no join to `reports`). `project_report_counters` view exists in schema but is not wired. Deferred until owner authorizes approach.
+- iPhone Safari/Chrome visual validation: deferred to later mobile QA
+- Browser automation: non-blocking/deferred
 
 ---
 
 ## Next Checkpoint
 
-**CP4 — Projects**
+**CP5 — Project Detail**
 Status: **NOT STARTED. Awaiting owner authorization.**
 
 ---
 
-## Deferred Issues
+## Deferred Issues (running list)
 
 | ID | Description | Target |
 |----|-------------|--------|
 | D1 | iPhone Safari/Chrome visual validation | Later mobile QA |
-| D2 | PDF bundle chunk >500 kB (pre-existing, `@react-pdf/renderer`) | CP8 |
+| D2 | PDF bundle chunk >500 kB (pre-existing) | CP8 |
 | D3 | Dedicated maskable PWA icons | CP9 |
-| D4 | Browser screenshot automation | Post-launch or explicit authorization |
+| D4 | Browser screenshot automation | Post-launch |
+| D5 | Report count + last-report-date on project cards | Owner authorization required |
 
 ---
 
@@ -83,22 +89,12 @@ Owner visual reference material. Do **not** modify, stage, delete, or commit wit
 ## Roadmap
 
 ```
-CP4   Projects
 CP5   Project Detail + report navigation
 CP6   Report Editor + Photo UX
 CP7   Preview + More / Billing
 CP8   Professional PDF redesign
 CP9   PWA hardening
 CP10  Final QA / regression
-
-Then:
-  - Security / RLS production gate
-  - Static / legal / deployment requirements
-  - Production Supabase
-  - Production Stripe
-  - Cloudflare deployment
-  - Live acceptance testing
-  - Launch
 ```
 
 ---

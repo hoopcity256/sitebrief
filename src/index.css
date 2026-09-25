@@ -695,3 +695,486 @@ button, a, [role="button"] {
   color: var(--color-text-disabled);
   font-size: var(--text-sm);
 }
+
+/* ── CP4: Projects ───────────────────────────────────────────────────────────── */
+
+/* Page wrapper */
+.projects-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--color-background);
+}
+
+/* ── Projects header ─────────────────────────────────────────────────────── */
+.projects-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: max(var(--space-4), env(safe-area-inset-top)) var(--space-4) 14px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* Mobile wordmark — "SiteBrief" acts as the de-facto logo */
+.projects-wordmark {
+  font-size: 22px;
+  font-weight: var(--weight-bold);
+  color: var(--color-primary);
+  letter-spacing: -0.3px;
+  line-height: var(--leading-tight);
+  margin: 0;
+}
+
+/* On desktop the sidebar already shows the wordmark — hide the page header wordmark */
+@media (min-width: 1024px) {
+  .projects-wordmark {
+    display: none;
+  }
+
+  .projects-header {
+    /* On desktop: padding adjusts since no sticky needed within content pane */
+    padding-top: var(--space-6);
+    position: static;
+  }
+}
+
+/* ── FAB (add project) — 48×48 minimum per global rule ──────────────────── */
+.projects-fab {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(26, 82, 118, 0.30);
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.projects-fab:hover {
+  background: var(--color-primary-hover);
+}
+
+/* ── Project list ────────────────────────────────────────────────────────── */
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* ── Project card ────────────────────────────────────────────────────────── */
+.project-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: stretch;
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+.project-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.project-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Main tappable body of the card */
+.project-card__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px var(--space-4);
+  /* Make the entire body area the tap target for navigation */
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Optional folder anchor icon */
+.project-card__icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* Text content */
+.project-card__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-card__name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: var(--leading-snug);
+  margin: 0;
+}
+
+.project-card__meta {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: var(--leading-snug);
+  margin: 0;
+}
+
+/* Three-dot menu zone */
+.project-card__menu-zone {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-right: var(--space-1);
+}
+
+.project-card__menu-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-card__menu-btn:hover {
+  background: var(--color-primary-muted);
+  color: var(--color-text-secondary);
+}
+
+/* Inline archive action (shown when menu is open) */
+.project-card__menu-popover {
+  position: absolute;
+  right: var(--space-3);
+  top: calc(100% - 4px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  min-width: 150px;
+  overflow: hidden;
+}
+
+.project-card__menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 12px var(--space-4);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  color: var(--color-text-secondary);
+  text-align: left;
+  transition: background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-card__menu-item:hover {
+  background: var(--color-primary-muted);
+}
+
+.project-card__menu-item--danger {
+  color: var(--color-warning);
+}
+
+/* Card wrapper needs position: relative for the popover */
+.project-card-wrap {
+  position: relative;
+}
+
+/* ── Skeleton loaders ────────────────────────────────────────────────────── */
+.projects-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.projects-skeleton__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.projects-skeleton__line {
+  height: 14px;
+  border-radius: var(--radius-sm);
+}
+
+.projects-skeleton__line--title {
+  width: 60%;
+  height: 16px;
+}
+
+.projects-skeleton__line--meta {
+  width: 40%;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.projects-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12) var(--space-6);
+  text-align: center;
+  gap: var(--space-3);
+}
+
+.projects-empty__icon {
+  color: var(--color-border);
+  margin-bottom: var(--space-2);
+}
+
+.projects-empty__heading {
+  font-size: 17px;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text);
+  margin: 0;
+  line-height: var(--leading-tight);
+}
+
+.projects-empty__sub {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+  line-height: var(--leading-snug);
+}
+
+.projects-empty__btn {
+  min-height: 52px;
+  padding: 0 var(--space-8);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  margin-top: var(--space-2);
+  transition: background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.projects-empty__btn:hover {
+  background: var(--color-primary-hover);
+}
+
+/* ── Error state ─────────────────────────────────────────────────────────── */
+.projects-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-6);
+  text-align: center;
+  gap: var(--space-4);
+}
+
+.projects-error__text {
+  font-size: var(--text-md);
+  color: var(--color-danger);
+  margin: 0;
+  line-height: var(--leading-snug);
+}
+
+.projects-error__retry {
+  min-height: 48px;
+  padding: 0 var(--space-8);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.projects-error__retry:hover {
+  background: var(--color-primary-hover);
+}
+
+/* ── New Project form ────────────────────────────────────────────────────── */
+.new-project-form-wrap {
+  padding: var(--space-2) var(--space-4);
+}
+
+.new-project-form {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-5);
+}
+
+.new-project-form__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--color-primary);
+  margin: 0 0 var(--space-4);
+  line-height: var(--leading-tight);
+}
+
+.new-project-form__error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  margin-bottom: var(--space-3);
+}
+
+.new-project-form__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.new-project-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.new-project-form__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-snug);
+}
+
+.new-project-form__required {
+  color: var(--color-danger);
+}
+
+.new-project-form__input {
+  height: 48px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-surface);
+  box-sizing: border-box;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.new-project-form__input::placeholder {
+  color: var(--color-text-disabled);
+}
+
+.new-project-form__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.new-project-form__cancel {
+  flex: 1;
+  min-height: 48px;
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.new-project-form__cancel:hover {
+  background: var(--color-background);
+  color: var(--color-text-secondary);
+}
+
+.new-project-form__submit {
+  flex: 1;
+  min-height: 48px;
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.new-project-form__submit:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.new-project-form__submit:disabled {
+  opacity: 0.50;
+  cursor: not-allowed;
+}
+
+/* Small inline spinner for archiving state */
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: sb-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
