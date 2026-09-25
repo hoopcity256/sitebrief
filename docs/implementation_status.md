@@ -12,8 +12,8 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ## Current Accepted Baseline
 
-`TBD — commit in progress`
-Branch: `main` | Remote: `origin/main` in sync: **pending push**
+`84d8ab9  feat(ui): implement North Star experience and project covers`
+Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
 
@@ -28,7 +28,7 @@ Branch: `main` | Remote: `origin/main` in sync: **pending push**
 | CP3 | `4a00b78` | Auth + Onboarding redesign |
 | CP4 | `cb6f2e5` | Projects experience redesign |
 | CP5 | `1937f89` | Project Detail + Report History Navigation |
-| **NS+CP6** | **TBD** | **North Star visual transformation + CP6 editor + project cover photos** |
+| **NS+CP6** | **`84d8ab9`** | **North Star visual transformation + CP6 editor + project cover photos** |
 
 ---
 
@@ -131,6 +131,99 @@ This phase has not begun as part of the NS+CP6 checkpoint.
 - ✅ Cover photo migration applied to sandbox only
 - ✅ Image proportions preserved (object-fit: cover, 120px card, 200px hero)
 - ✅ AppShell, Editor, More not redesigned in this pass
+
+---
+
+## North Star Auth + Onboarding
+
+**Baseline:** `84d8ab9  feat(ui): implement North Star experience and project covers`
+**Status:** OWNER APPROVED — committed as `feat(ui): complete North Star auth and onboarding`
+
+### Sandbox Redirect URL Configuration
+
+`http://localhost:5173/update-password` added to sandbox (`toitahshmkxazxqqopzg`) `additional_redirect_urls` via `supabase config push`.
+
+- Verified applied: `config diff` no longer shows `additional_redirect_urls` as a difference after push.
+- `supabase/config.toml` updated to include `http://localhost:5173/update-password` in `additional_redirect_urls`.
+- Storage push failed with 402 (vector buckets require paid tier) — unrelated to auth, no impact.
+- **Production `qbycpzfyugrsbckrpyak` untouched.**
+
+> **For production deploy**: add the hosted URL + `/update-password` to `qbycpzfyugrsbckrpyak` → Authentication → URL Configuration → Redirect URLs in the Supabase Dashboard.
+
+### Reset email round-trip status
+
+Code path verified in code. Sandbox redirect URL configured. **Actual email round-trip has NOT been manually tested yet** — ready for owner to perform after deployment.
+
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `AuthLayout.tsx` | Two-zone NS layout: navy hero panel (wordmark + tagline) + white form panel with rounded top corners. Desktop: centred card with 4px navy accent bar + inline wordmark. `title` prop drives the page-level h1 inside the panel. |
+| `LoginPage.tsx` | Uses new `AuthLayout` with `title="Sign In"`. Footer hierarchy: primary Create Account link → tertiary Forgot Password. Added `autoCapitalize="none"` and `spellCheck={false}` on email. |
+| `SignUpPage.tsx` | Uses new layout with `title="Create Account"`. Inline "Minimum 8 characters" hint in label. |
+| `PasswordResetPage.tsx` | Polished success state: `submitted` flag → shows icon (`MailIcon`) + heading + body + inline "try again" button. No form visible after success. Error path unchanged. |
+| `UpdatePasswordPage.tsx` | Uses new layout with `title="New Password"`. Inline password minimum hint in label. |
+| `OnboardingPage.tsx` | NS two-zone layout with `BuildingIcon` icon accent above title. Brand color picker: visible color preview swatch (CSS) + overlay native `<input type="color">` + hex display. Removed 'Logo upload coming soon' placeholder. All data model/logic preserved. |
+| `src/index.css` | Entire CP3 auth CSS block replaced. New classes: `.auth-hero`, `.auth-hero__wordmark`, `.auth-hero__tagline`, `.auth-panel`, `.auth-panel__header`, `.auth-panel__title`, `.auth-panel__subtitle`, `.auth-panel__body`, `.auth-field-label__hint`, `.auth-field-label__required`, `.auth-link--tertiary`, `.auth-link-btn`, `.auth-sent-state` (+ children), `.onboarding-icon`, `.onboarding-color-row`, `.onboarding-color-preview`, `.onboarding-color-input`, `.onboarding-color-value`, desktop media query at 680px. Removed: `.auth-card`, `.auth-header`, `.auth-wordmark`, `.auth-subtitle`, `.auth-logo-placeholder`, `.auth-color-row`, `.auth-color-swatch`. |
+
+### Auth business logic preserved
+
+| Item | Status |
+|------|--------|
+| `signIn` | ✅ Unchanged |
+| `signUp` | ✅ Unchanged |
+| `signOut` | ✅ Unchanged |
+| `resetPassword` | ✅ Unchanged |
+| `updatePassword` | ✅ Unchanged |
+| Password validation (≥8 chars, match) | ✅ Unchanged |
+| `sanitizeAuthError` | ✅ Unchanged |
+| Redirect-back after login (`location.state.from`) | ✅ Unchanged |
+| `AuthGuard` → `/onboarding` redirect | ✅ Unchanged |
+| `onboarding_complete: true` on submit | ✅ Unchanged |
+| `upsertCompanyProfile` data model | ✅ Unchanged |
+
+### Sign Out verification
+
+`MorePage` → `handleSignOut()` → `await signOut()` → `supabase.auth.signOut()` → fires `onAuthStateChange` in `AuthContext` → `user = null` → `AuthGuard` redirects unauthenticated requests to `/login`. Path is **complete and functional**. No defects found.
+
+### Password reset flow (code path)
+
+1. `PasswordResetPage` → `resetPassword(email)` → `supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/update-password' })`
+2. Supabase sends email containing a magic link that redirects to `https://<origin>/update-password#access_token=...&type=recovery`
+3. Browser loads `/update-password`; Supabase JS client fires `onAuthStateChange(PASSWORD_RECOVERY, session)` → `AuthContext` sets `user`
+4. `UpdatePasswordPage` → `updatePassword(password)` → `supabase.auth.updateUser({ password })`
+5. On success → `navigate('/projects')` → `AuthGuard` loads normally
+
+### Reset redirect URL configuration required
+
+The `redirectTo` value is `window.location.origin + '/update-password'`.
+
+For local sandbox testing: `http://localhost:5173/update-password` must be listed in:
+> Supabase Dashboard → `toitahshmkxazxqqopzg` → Authentication → URL Configuration → Redirect URLs
+
+For production (do not touch yet): `https://<production-domain>/update-password` must be listed in:
+> Supabase Dashboard → `qbycpzfyugrsbckrpyak` → Authentication → URL Configuration → Redirect URLs
+
+Without this configuration, Supabase will reject the redirect URL and the email link will not work.
+
+### Quality gate
+
+| Gate | Result |
+|------|--------|
+| `npm test -- --run` | ✅ 37/37 passing |
+| `npx tsc --noEmit` | ✅ 0 errors |
+| `npm run build` | ✅ Clean |
+| `git diff --check` | ✅ Clean |
+| North Star/ untracked | ✅ Confirmed |
+| Production untouched | ✅ Confirmed |
+
+---
+
+## Next After Owner Visual Acceptance
+
+Sandbox-backed hosted deployment / mobile device testing.
+**Preview/PDF has NOT started.**
 
 ---
 

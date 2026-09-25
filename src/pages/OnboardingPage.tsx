@@ -3,11 +3,12 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { upsertCompanyProfile } from '../lib/companyProfile'
+import { BuildingIcon } from '../components/icons'
 
 /**
  * Company profile setup — presented once after signup.
  * All form fields, validation, and upsertCompanyProfile logic preserved unchanged.
- * Styling migrated to CSS classes in index.css (CP3).
+ * Visual: uses auth-page / onboarding-* CSS classes for the North Star treatment.
  */
 export const OnboardingPage = () => {
   const { user } = useAuth()
@@ -49,113 +50,119 @@ export const OnboardingPage = () => {
   }
 
   return (
-    <div className="auth-page">
-      <main className="auth-card">
-        <header className="auth-header">
-          <h1 className="auth-wordmark">SiteBrief</h1>
-          <p className="auth-subtitle">Set up your company profile to get started.</p>
+    <div className="auth-page auth-page--onboarding">
+      {/* ── Branded hero ── */}
+      <div className="auth-hero" aria-hidden="true">
+        <span className="auth-hero__wordmark">SiteBrief</span>
+        <span className="auth-hero__tagline">One last step before you start documenting.</span>
+      </div>
+
+      {/* ── Onboarding panel ── */}
+      <main className="auth-panel">
+        <header className="auth-panel__header">
+          <div className="onboarding-icon" aria-hidden="true">
+            <BuildingIcon size={22} />
+          </div>
+          <h1 className="auth-panel__title">Set Up SiteBrief</h1>
+          <p className="auth-panel__subtitle">Tell us about your company.</p>
         </header>
 
-        <form onSubmit={handleSubmit} className="auth-form">
-          {/* Company Name */}
-          <div className="auth-field">
-            <label htmlFor="onboarding-company-name" className="auth-field-label">
-              Company Name <span aria-hidden="true">*</span>
-            </label>
-            <input
-              id="onboarding-company-name"
-              className="auth-input"
-              type="text"
-              value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="Your Company LLC"
-              required
-              autoComplete="organization"
-            />
-          </div>
-
-          {/* Phone */}
-          <div className="auth-field">
-            <label htmlFor="onboarding-phone" className="auth-field-label">
-              Phone
-            </label>
-            <input
-              id="onboarding-phone"
-              className="auth-input"
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(555) 123-4567"
-              autoComplete="tel"
-            />
-          </div>
-
-          {/* Email */}
-          <div className="auth-field">
-            <label htmlFor="onboarding-email" className="auth-field-label">
-              Email
-            </label>
-            <input
-              id="onboarding-email"
-              className="auth-input"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="office@company.com"
-              autoComplete="email"
-            />
-          </div>
-
-          {/* Brand Color */}
-          <div className="auth-field">
-            <label htmlFor="onboarding-brand-color" className="auth-field-label">
-              Brand Color
-            </label>
-            <div className="auth-color-row">
+        <div className="auth-panel__body">
+          <form onSubmit={handleSubmit} className="auth-form">
+            {/* Company Name — required */}
+            <div className="auth-field">
+              <label htmlFor="onboarding-company-name" className="auth-field-label">
+                Company Name <span className="auth-field-label__required" aria-hidden="true">*</span>
+              </label>
               <input
-                id="onboarding-brand-color"
-                className="auth-color-swatch"
-                type="color"
-                value={brandColor}
-                onChange={(e) => setBrandColor(e.target.value)}
+                id="onboarding-company-name"
+                className="auth-input"
+                type="text"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="Your Company LLC"
+                required
+                autoComplete="organization"
               />
-              <span className="auth-color-value">{brandColor}</span>
             </div>
-            <p className="auth-field-hint">Used as an accent in your PDF reports.</p>
-          </div>
 
-          {/* Logo placeholder */}
-          <div className="auth-logo-placeholder" aria-hidden="true">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 20 20"
-              fill="none"
-              aria-hidden="true"
-              focusable="false"
+            {/* Phone — optional */}
+            <div className="auth-field">
+              <label htmlFor="onboarding-phone" className="auth-field-label">
+                Phone
+                <span className="auth-field-label__hint">Optional</span>
+              </label>
+              <input
+                id="onboarding-phone"
+                className="auth-input"
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(555) 123-4567"
+                autoComplete="tel"
+              />
+            </div>
+
+            {/* Email — optional */}
+            <div className="auth-field">
+              <label htmlFor="onboarding-email" className="auth-field-label">
+                Company Email
+                <span className="auth-field-label__hint">Optional</span>
+              </label>
+              <input
+                id="onboarding-email"
+                className="auth-input"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="office@company.com"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+            </div>
+
+            {/* Brand Color */}
+            <div className="auth-field">
+              <label htmlFor="onboarding-brand-color" className="auth-field-label">
+                Report Accent Color
+              </label>
+              <div className="onboarding-color-row">
+                {/* Color swatch — clickable */}
+                <div
+                  className="onboarding-color-preview"
+                  style={{ background: brandColor }}
+                  aria-hidden="true"
+                />
+                <input
+                  id="onboarding-brand-color"
+                  className="onboarding-color-input"
+                  type="color"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  aria-label="Choose brand color"
+                />
+                <span className="onboarding-color-value">{brandColor.toUpperCase()}</span>
+              </div>
+              <p className="auth-field-hint">Used as an accent in your PDF reports.</p>
+            </div>
+
+            {error && (
+              <div className="auth-message auth-message--error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <button
+              id="onboarding-submit"
+              type="submit"
+              disabled={submitting}
+              className="auth-btn-primary"
             >
-              <rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
-              <circle cx="7" cy="7.5" r="1.5" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M2 13l4-3 3 3 3-4 4 6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-            </svg>
-            <span>Logo upload coming soon</span>
-          </div>
-
-          {error && (
-            <div className="auth-message auth-message--error" role="alert">
-              {error}
-            </div>
-          )}
-
-          <button
-            id="onboarding-submit"
-            type="submit"
-            disabled={submitting}
-            className="auth-btn-primary"
-          >
-            {submitting ? 'Saving…' : 'Get Started'}
-          </button>
-        </form>
+              {submitting ? 'Saving…' : 'Get Started'}
+            </button>
+          </form>
+        </div>
       </main>
     </div>
   )

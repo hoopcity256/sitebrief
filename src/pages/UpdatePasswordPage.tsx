@@ -44,7 +44,10 @@ export default function UpdatePasswordPage() {
   }
 
   return (
-    <AuthLayout subtitle="Choose a new password for your account.">
+    <AuthLayout
+      title="New Password"
+      subtitle="Choose a strong password for your account."
+    >
       {error && (
         <div className="auth-message auth-message--error" role="alert">
           {error}
@@ -55,6 +58,7 @@ export default function UpdatePasswordPage() {
         <div className="auth-field">
           <label htmlFor="update-password" className="auth-field-label">
             New Password
+            <span className="auth-field-label__hint">Minimum 8 characters</span>
           </label>
           <div className="auth-input-wrap">
             <input
@@ -89,7 +93,7 @@ export default function UpdatePasswordPage() {
             type={showPassword ? 'text' : 'password'}
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Repeat your password"
+            placeholder="Repeat your new password"
             required
             minLength={8}
             autoComplete="new-password"

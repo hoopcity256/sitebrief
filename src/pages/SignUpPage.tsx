@@ -41,9 +41,10 @@ export default function SignUpPage() {
 
   return (
     <AuthLayout
-      subtitle="Create your account to start documenting jobsites."
+      title="Create Account"
+      subtitle="Start documenting your jobsites."
       footer={
-        <Link to="/login" className="auth-link">
+        <Link to="/login" className="auth-link auth-link--primary">
           Already have an account? <strong>Sign in</strong>
         </Link>
       }
@@ -73,12 +74,15 @@ export default function SignUpPage() {
             placeholder="you@company.com"
             required
             autoComplete="email"
+            autoCapitalize="none"
+            spellCheck={false}
           />
         </div>
 
         <div className="auth-field">
           <label htmlFor="signup-password" className="auth-field-label">
             Password
+            <span className="auth-field-label__hint">Minimum 8 characters</span>
           </label>
           <div className="auth-input-wrap">
             <input

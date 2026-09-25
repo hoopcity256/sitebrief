@@ -37,13 +37,13 @@ export default function LoginPage() {
 
   return (
     <AuthLayout
-      subtitle="Sign in to manage your jobsite reports."
+      title="Sign In"
       footer={
         <>
-          <Link to="/signup" className="auth-link">
-            Don&apos;t have an account? <strong>Sign up</strong>
+          <Link to="/signup" className="auth-link auth-link--primary">
+            Don&apos;t have an account? <strong>Create one</strong>
           </Link>
-          <Link to="/reset-password" className="auth-link">
+          <Link to="/reset-password" className="auth-link auth-link--tertiary">
             Forgot password?
           </Link>
         </>
@@ -69,6 +69,8 @@ export default function LoginPage() {
             placeholder="you@company.com"
             required
             autoComplete="email"
+            autoCapitalize="none"
+            spellCheck={false}
           />
         </div>
 
