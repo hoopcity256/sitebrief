@@ -1,71 +1,67 @@
 import React, { useState, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { FolderIcon, DocumentIcon, EllipsisHIcon } from './icons'
 
-// ── SVG Icons ─────────────────────────────────────────────────────────────
-
-const IconProjects = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" width="22" height="22" aria-hidden="true">
-    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-  </svg>
-)
-
-const IconReports = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" width="22" height="22" aria-hidden="true">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="9" y1="13" x2="15" y2="13" />
-    <line x1="9" y1="17" x2="12" y2="17" />
-  </svg>
-)
-
-const IconMore = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" width="22" height="22" aria-hidden="true">
-    <circle cx="5"  cy="12" r="1.2" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.2" fill="currentColor" stroke="none" />
-  </svg>
-)
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-type ActiveTab = 'projects' | 'reports' | 'more'
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface AppShellProps {
-  activeTab: ActiveTab
+  /**
+   * @deprecated The activeTab prop is no longer used.
+   * Active nav state is derived from useLocation() automatically.
+   * Retained as an optional ignored field so existing page callsites
+   * continue to compile without modification until they are migrated
+   * in Checkpoints 3–7.
+   */
+  activeTab?: string
   children: React.ReactNode
 }
 
-// ── AppShell ───────────────────────────────────────────────────────────────
+// ── Active-tab derivation ──────────────────────────────────────────────────────
+
+function deriveActiveTab(pathname: string): 'projects' | 'more' | 'none' {
+  if (pathname.startsWith('/projects') || pathname.startsWith('/preview')) return 'projects'
+  if (pathname === '/more') return 'more'
+  return 'none'
+}
+
+// ── AppShell ───────────────────────────────────────────────────────────────────
 
 /**
  * Responsive authenticated shell.
  *
- * Mobile  (320–1023px): full-height column, fixed bottom tab bar.
- * Desktop (1024px+):    sticky left sidebar (220px) + centered content (max 860px).
+ * Mobile  (<1024px): fixed bottom tab bar, safe-area aware.
+ * Desktop (≥1024px): sticky flat-white left sidebar (220px) + centered content.
  *
- * Not shown during Onboarding or the focused Report Editor.
+ * Active nav state is derived from useLocation() — no activeTab prop needed.
+ * Reports is permanently a Coming-Soon placeholder (owner decision 1).
  */
-export const AppShell = ({ activeTab, children }: AppShellProps) => {
-  const navigate = useNavigate()
-  const location = useLocation()
+export const AppShell = ({ children }: AppShellProps) => {
+  const navigate  = useNavigate()
+  const location  = useLocation()
+  const activeTab = deriveActiveTab(location.pathname)
+
   const [showComingSoon, setShowComingSoon] = useState(false)
+  const [toastKey, setToastKey] = useState(0)
 
   const handleReportsTap = useCallback(() => {
-    // Reports is a Week 2 placeholder — never navigate to an empty screen
+    // Always fire, even if toast is already visible — reset the auto-dismiss timer
+    setToastKey(k => k + 1)
     setShowComingSoon(true)
-    setTimeout(() => setShowComingSoon(false), 2000)
+    const id = setTimeout(() => setShowComingSoon(false), 2000)
+    return () => clearTimeout(id)
   }, [])
 
-  const isActive = (tab: ActiveTab) => activeTab === tab
-
-  // Avoid redundant navigation to the current route
   const goTo = useCallback((path: string) => {
     if (location.pathname !== path) navigate(path)
   }, [navigate, location.pathname])
 
+  const projectsActive = activeTab === 'projects'
+  const moreActive     = activeTab === 'more'
+
   return (
     <div className="app-shell">
-      {/* ── Navigation (bottom bar on mobile, sidebar on desktop) ── */}
+
+      {/* ── Navigation ─────────────────────────────────────────────── */}
       <nav className="app-shell__tab-bar" aria-label="Main navigation">
 
         {/* Desktop-only wordmark */}
@@ -75,50 +71,65 @@ export const AppShell = ({ activeTab, children }: AppShellProps) => {
 
         {/* Projects */}
         <button
-          className={`tab-item${isActive('projects') ? ' tab-item--active' : ''}`}
+          className={`tab-item${projectsActive ? ' tab-item--active' : ''}`}
           onClick={() => goTo('/projects')}
           aria-label="Projects"
-          aria-current={isActive('projects') ? 'page' : undefined}
+          aria-current={projectsActive ? 'page' : undefined}
+          type="button"
         >
-          <span className="tab-item__icon"><IconProjects /></span>
+          <span className="tab-item__icon">
+            <FolderIcon size={22} />
+          </span>
           <span className="tab-item__label">Projects</span>
         </button>
 
-        {/* Reports — Coming Soon */}
+        {/* Reports — Coming Soon placeholder */}
         <button
-          className="tab-item tab-item--disabled"
+          className="tab-item tab-item--coming-soon"
           onClick={handleReportsTap}
           aria-label="Reports — coming soon"
           aria-disabled="true"
           type="button"
         >
-          <span className="tab-item__icon"><IconReports /></span>
+          <span className="tab-item__icon">
+            <DocumentIcon size={22} />
+          </span>
           <span className="tab-item__label">Reports</span>
         </button>
 
         {/* More */}
         <button
-          className={`tab-item${isActive('more') ? ' tab-item--active' : ''}`}
+          className={`tab-item${moreActive ? ' tab-item--active' : ''}`}
           onClick={() => goTo('/more')}
           aria-label="More"
-          aria-current={isActive('more') ? 'page' : undefined}
+          aria-current={moreActive ? 'page' : undefined}
+          type="button"
         >
-          <span className="tab-item__icon"><IconMore /></span>
+          <span className="tab-item__icon">
+            <EllipsisHIcon size={22} />
+          </span>
           <span className="tab-item__label">More</span>
         </button>
+
       </nav>
 
-      {/* ── Main content ── */}
+      {/* ── Main content ─────────────────────────────────────────────── */}
       <main className="app-shell__content">
         {children}
       </main>
 
-      {/* ── Coming Soon toast ── */}
+      {/* ── Coming-Soon toast ─────────────────────────────────────────── */}
       {showComingSoon && (
-        <div className="coming-soon-toast" role="status" aria-live="polite">
+        <div
+          key={toastKey}
+          className="coming-soon-toast"
+          role="status"
+          aria-live="polite"
+        >
           Reports — coming soon
         </div>
       )}
+
     </div>
   )
 }
