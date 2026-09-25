@@ -35,10 +35,10 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ## Current Checkpoint
 
-### HOSTED SANDBOX DEPLOYMENT — PENDING CLOUDFLARE TOKEN
+### HOSTED SANDBOX DEPLOYMENT — LIVE ✅
 
 **Accepted baseline:** `b89574e  feat(ui): complete North Star auth and onboarding`
-**Status:** Configuration complete — deployment blocked on Cloudflare API token (one manual step required from owner — see below).
+**Status:** DEPLOYED — `https://sitebrief-sandbox.pages.dev`
 
 #### What this checkpoint delivers
 
@@ -224,68 +224,56 @@ Without this configuration, Supabase will reject the redirect URL and the email 
 
 ---
 
-## Hosted Sandbox Deployment
+## Hosted Sandbox Deployment — COMPLETED
 
 **Accepted baseline:** `b89574e  feat(ui): complete North Star auth and onboarding`
-**Status:** CONFIGURATION COMPLETE — blocked on one owner action (Cloudflare API token)
+**Status:** ✅ LIVE — `https://sitebrief-sandbox.pages.dev`
 
-### Hosting Target
+### Deployment Record
 
 | Field | Value |
 |-------|-------|
 | Provider | Cloudflare Pages |
+| CF Account | Limboproxy@gmail.com's Account |
 | Project name | `sitebrief-sandbox` |
-| Target URL | `https://sitebrief-sandbox.pages.dev` (exact URL assigned after first deploy) |
-| Production URL (DO NOT USE) | `sitebrief.scope-guard.com` — reserved for production |
+| **Canonical sandbox URL** | **https://sitebrief-sandbox.pages.dev** |
+| Deployment URL | https://23fdb73a.sitebrief-sandbox.pages.dev |
+| Deployed | 2026-09-24 |
+| Git baseline | `1ef7f4c` |
+| Production URL (untouched) | `sitebrief.scope-guard.com` |
 | Sandbox Supabase ref | `toitahshmkxazxqqopzg` (sitebrief-test) |
-| Production Supabase (DO NOT TOUCH) | `qbycpzfyugrsbckrpyak` (sitebrief) |
-| Stripe environment | Sandbox (test) — Stripe Live untouched |
+| Production Supabase (untouched) | `qbycpzfyugrsbckrpyak` |
+| Stripe environment | Sandbox — Stripe Live untouched |
 
-### Environment Variables (by name only — no secrets)
+### HTTP Smoke Test Results
 
-These 4 VITE_ vars must be set as **Build Variables** in the Cloudflare Pages project settings (not Worker secrets):
-
-| Variable | Purpose |
-|----------|---------|
-| `VITE_SUPABASE_URL` | Sandbox Supabase project URL |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Sandbox anon/publishable key (safe to expose — client-side) |
-| `VITE_STRIPE_MONTHLY_PRICE_ID` | Sandbox monthly price ID |
-| `VITE_STRIPE_ANNUAL_PRICE_ID` | Sandbox annual price ID |
-
-### Build Configuration
-
-| Setting | Value |
-|---------|-------|
-| Build command | `npm run build` |
-| Output directory | `dist` |
-| Node.js version | 18+ |
-| SPA fallback | `public/_redirects` → `/* /index.html 200` ✅ already present |
-| Security headers | `public/_headers` ✅ already present |
-
-### Billing Redirect Analysis
-
-Both Edge Functions (`create-checkout-session`, `create-portal-session`) use `getBaseUrl(req)` which derives `success_url`, `cancel_url`, and `return_url` **from the request Origin header** — not hardcoded. The sandbox pages.dev origin will be allowed automatically once it matches `APP_URL` env var or `localhost` patterns. No Edge Function code changes required.
-
-For the sandbox Edge Functions, set `APP_URL=https://sitebrief-sandbox.pages.dev` (or the actual pages.dev URL) in the **sandbox** Edge Function secrets via Supabase dashboard.
+| Route | Status |
+|-------|--------|
+| `/` | ✅ 200 HTML |
+| `/login` | ✅ 200 SPA fallback |
+| `/signup` | ✅ 200 SPA fallback |
+| `/reset-password` | ✅ 200 SPA fallback |
+| `/update-password` | ✅ 200 SPA fallback |
+| `/manifest.json` | ✅ 200 JSON |
 
 ### Auth Redirect Status
 
 | URL | Status |
 |-----|--------|
-| `http://localhost:5173/update-password` | ✅ Applied to sandbox via `supabase config push` |
-| `https://<pages.dev URL>/update-password` | ⏳ Must be added after first deploy gives exact URL |
+| `http://localhost:5173/update-password` | ✅ Applied (prior session) |
+| `https://sitebrief-sandbox.pages.dev/update-password` | ✅ Applied 2026-09-24 |
 
-### Deployment Command (ready to run)
+### Billing Redirect Status
 
-```bash
-# Step 1: Build (already done — dist/ exists)
-cmd /c "npm run build"
+`APP_URL` secret updated to `https://sitebrief-sandbox.pages.dev` in sandbox Edge Functions.
 
-# Step 2: Deploy (owner must supply token and account ID)
-cmd /c "set CLOUDFLARE_API_TOKEN=<token> && set CLOUDFLARE_ACCOUNT_ID=<account_id> && npx wrangler pages deploy dist --project-name=sitebrief-sandbox"
-```
+| Redirect | URL |
+|----------|-----|
+| Checkout success | `https://sitebrief-sandbox.pages.dev/billing/success?session_id=...` ✅ |
+| Checkout cancel | `https://sitebrief-sandbox.pages.dev/billing/cancel` ✅ |
+| Portal return | `https://sitebrief-sandbox.pages.dev/more` ✅ |
 
-### Quality Gate (pre-deploy)
+### Quality Gate
 
 | Gate | Result |
 |------|--------|
@@ -296,26 +284,9 @@ cmd /c "set CLOUDFLARE_API_TOKEN=<token> && set CLOUDFLARE_ACCOUNT_ID=<account_i
 | North Star/ untracked | ✅ Confirmed |
 | Production untouched | ✅ Confirmed |
 
-### One Manual Owner Action Required
-
-**To unblock deployment:**
-
-> Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) → My Profile → API Tokens → Create Token → use **Edit Cloudflare Pages** template.
-> Copy the token and your Account ID (visible on any zone overview page).
-> Run the deployment command above (or provide values here for agent execution).
-
-### Post-Deploy Steps (after URL is known)
-
-1. Add `https://<actual-pages-dev-url>/update-password` to sandbox Supabase (`toitahshmkxazxqqopzg`) → Authentication → URL Configuration → Redirect URLs (Supabase Dashboard — targeted change only)
-2. Set `APP_URL=https://<actual-pages-dev-url>` in sandbox Edge Function secrets
-3. Set VITE_ build variables in Cloudflare Pages project settings
-4. Perform owner device test checklist
-
 ### Next Phase After Device Acceptance
 
-**PREVIEW + PROFESSIONAL PDF**
-
-**Preview/PDF has NOT started.**
+**PREVIEW + PROFESSIONAL PDF — not started.**
 
 ---
 
