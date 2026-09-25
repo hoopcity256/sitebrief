@@ -10,9 +10,10 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ---
 
-## Baseline Before CP2 Commit
+## Accepted Baseline
 
-`c04029d  feat(ui): establish SiteBrief design system foundation`
+`8304967  feat(ui): complete AppShell navigation checkpoint`
+Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
 
@@ -22,9 +23,15 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 |------------|--------|-------------|
 | Billing | `d203f79` | Stripe subscription lifecycle |
 | CP1 | `c04029d` | Design system foundation |
-| CP2 | _(see commit hash below)_ | AppShell / Navigation |
+| CP2 | `8304967` | AppShell / Navigation (useLocation authoritative) |
 
-> **CP2 commit hash**: to be recorded after push. See session report.
+---
+
+## Current Status
+
+**Pre-CP3 design-spec restoration complete.**
+
+`docs/final_design_spec.md` has been recovered from artifact storage and committed verbatim (byte-identical copy, 1,233 lines / 60,201 bytes).
 
 ---
 
@@ -57,12 +64,10 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ---
 
-## Current Checkpoint
+## Next Checkpoint
 
 **CP3 — Auth + Onboarding**
 Status: NOT STARTED — awaiting owner authorization.
-
-> ⚠️ `docs/final_design_spec.md` must be restored before CP3 implementation begins.
 
 ---
 
@@ -79,10 +84,9 @@ Owner visual reference material. Do **not** modify, stage, delete, or commit wit
 
 | ID | Description | Target |
 |----|-------------|--------|
-| D1 | `docs/final_design_spec.md` must be restored before CP3 | Before CP3 |
-| D2 | PDF bundle chunk >500 kB (pre-existing, `@react-pdf/renderer`) | CP8 |
-| D3 | Dedicated maskable PWA icons | CP9 |
-| D4 | Browser screenshot automation | Post-launch or explicit authorization |
+| D1 | PDF bundle chunk >500 kB (pre-existing, `@react-pdf/renderer`) | CP8 |
+| D2 | Dedicated maskable PWA icons | CP9 |
+| D3 | Browser screenshot automation | Post-launch or explicit authorization |
 
 ---
 
