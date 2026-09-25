@@ -4,6 +4,11 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { upsertCompanyProfile } from '../lib/companyProfile'
 
+/**
+ * Company profile setup — presented once after signup.
+ * All form fields, validation, and upsertCompanyProfile logic preserved unchanged.
+ * Styling migrated to CSS classes in index.css (CP3).
+ */
 export const OnboardingPage = () => {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -15,6 +20,7 @@ export const OnboardingPage = () => {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Preserve existing submit logic — unchanged
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!user) return
@@ -43,186 +49,114 @@ export const OnboardingPage = () => {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <h1 style={styles.heading}>Welcome to SiteBrief</h1>
-        <p style={styles.subheading}>
-          Set up your company profile to get started.
-        </p>
+    <div className="auth-page">
+      <main className="auth-card">
+        <header className="auth-header">
+          <h1 className="auth-wordmark">SiteBrief</h1>
+          <p className="auth-subtitle">Set up your company profile to get started.</p>
+        </header>
 
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>
-            Company Name *
+        <form onSubmit={handleSubmit} className="auth-form">
+          {/* Company Name */}
+          <div className="auth-field">
+            <label htmlFor="onboarding-company-name" className="auth-field-label">
+              Company Name <span aria-hidden="true">*</span>
+            </label>
             <input
               id="onboarding-company-name"
+              className="auth-input"
               type="text"
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
               placeholder="Your Company LLC"
               required
-              style={styles.input}
+              autoComplete="organization"
             />
-          </label>
+          </div>
 
-          <label style={styles.label}>
-            Phone
+          {/* Phone */}
+          <div className="auth-field">
+            <label htmlFor="onboarding-phone" className="auth-field-label">
+              Phone
+            </label>
             <input
               id="onboarding-phone"
+              className="auth-input"
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="(555) 123-4567"
-              style={styles.input}
+              autoComplete="tel"
             />
-          </label>
+          </div>
 
-          <label style={styles.label}>
-            Email
+          {/* Email */}
+          <div className="auth-field">
+            <label htmlFor="onboarding-email" className="auth-field-label">
+              Email
+            </label>
             <input
               id="onboarding-email"
+              className="auth-input"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="office@company.com"
-              style={styles.input}
+              autoComplete="email"
             />
-          </label>
+          </div>
 
-          <label style={styles.label}>
-            Brand Color
-            <div style={styles.colorRow}>
+          {/* Brand Color */}
+          <div className="auth-field">
+            <label htmlFor="onboarding-brand-color" className="auth-field-label">
+              Brand Color
+            </label>
+            <div className="auth-color-row">
               <input
                 id="onboarding-brand-color"
+                className="auth-color-swatch"
                 type="color"
                 value={brandColor}
                 onChange={(e) => setBrandColor(e.target.value)}
-                style={styles.colorInput}
               />
-              <span style={styles.colorValue}>{brandColor}</span>
+              <span className="auth-color-value">{brandColor}</span>
             </div>
-          </label>
+            <p className="auth-field-hint">Used as an accent in your PDF reports.</p>
+          </div>
 
-          <div style={styles.logoPlaceholder}>
-            <span style={styles.logoIcon}>📷</span>
+          {/* Logo placeholder */}
+          <div className="auth-logo-placeholder" aria-hidden="true">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="none"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
+              <circle cx="7" cy="7.5" r="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M2 13l4-3 3 3 3-4 4 6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
             <span>Logo upload coming soon</span>
           </div>
 
-          {error && <p style={styles.error}>{error}</p>}
+          {error && (
+            <div className="auth-message auth-message--error" role="alert">
+              {error}
+            </div>
+          )}
 
           <button
             id="onboarding-submit"
             type="submit"
             disabled={submitting}
-            style={{
-              ...styles.button,
-              opacity: submitting ? 0.6 : 1,
-            }}
+            className="auth-btn-primary"
           >
             {submitting ? 'Saving…' : 'Get Started'}
           </button>
         </form>
-      </div>
+      </main>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100dvh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '16px',
-    background: '#F8F9FA',
-  },
-  card: {
-    background: '#FFFFFF',
-    borderRadius: '12px',
-    padding: '32px 24px',
-    width: '100%',
-    maxWidth: '420px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-  },
-  heading: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: '#1A5276',
-    margin: '0 0 4px',
-  },
-  subheading: {
-    fontSize: '14px',
-    color: '#6C757D',
-    margin: '0 0 24px',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '16px',
-  },
-  label: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '4px',
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#495057',
-  },
-  input: {
-    padding: '12px',
-    borderRadius: '8px',
-    border: '1px solid #DEE2E6',
-    fontSize: '16px',
-    outline: 'none',
-    minHeight: '48px',
-  },
-  colorRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  colorInput: {
-    width: '48px',
-    height: '48px',
-    border: '1px solid #DEE2E6',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    padding: '2px',
-  },
-  colorValue: {
-    fontSize: '14px',
-    color: '#6C757D',
-    fontFamily: 'monospace',
-  },
-  logoPlaceholder: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '16px',
-    border: '2px dashed #DEE2E6',
-    borderRadius: '8px',
-    color: '#ADB5BD',
-    fontSize: '14px',
-  },
-  logoIcon: {
-    fontSize: '20px',
-  },
-  error: {
-    color: '#DC3545',
-    fontSize: '14px',
-    margin: 0,
-    padding: '8px 12px',
-    background: '#FFF3F3',
-    borderRadius: '6px',
-  },
-  button: {
-    minHeight: '48px',
-    background: '#1A5276',
-    color: '#FFFFFF',
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    marginTop: '8px',
-  },
 }

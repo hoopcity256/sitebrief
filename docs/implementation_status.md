@@ -10,9 +10,9 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ---
 
-## Accepted Baseline
+## Accepted Baseline Before CP3 Commit
 
-`8304967  feat(ui): complete AppShell navigation checkpoint`
+`08035d8  docs: preserve SiteBrief design specification`
 Branch: `main` | Remote: `origin/main` in sync: **yes**
 
 ---
@@ -24,35 +24,12 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | Billing | `d203f79` | Stripe subscription lifecycle |
 | CP1 | `c04029d` | Design system foundation |
 | CP2 | `8304967` | AppShell / Navigation (useLocation authoritative) |
+| Docs | `08035d8` | Design spec restored to docs/final_design_spec.md |
+| CP3 | _(see log after commit)_ | Auth + Onboarding — **APPROVED FOR COMMIT** |
 
 ---
 
-## Current Status
-
-**Pre-CP3 design-spec restoration complete.**
-
-`docs/final_design_spec.md` has been recovered from artifact storage and committed verbatim (byte-identical copy, 1,233 lines / 60,201 bytes).
-
----
-
-## CP2 Verified Behavior
-
-- `useLocation()` is authoritative for navigation active state
-- `/projects` and `/projects/*` → Projects active
-- `/preview/*` → Projects active
-- `/more` → More active
-- Reports remains Coming Soon; does not navigate
-- `activeTab` prop is `@deprecated`, retained for callsite compatibility, silently ignored
-- `CreateReportPage` is standalone and outside AppShell (full-screen, intended)
-- `ReportPreviewPage` remains inside AppShell (intended)
-- CP2 did not alter either page's architecture
-- Mobile fixed bottom navigation retained, safe-area aware
-- Desktop flat white sidebar retained (≥1024px)
-- Shared CP1 icons used (`FolderIcon`, `DocumentIcon`, `EllipsisHIcon`)
-
----
-
-## Latest Quality Gate (CP2)
+## CP3 Quality Gate
 
 | Gate | Result |
 |------|--------|
@@ -60,14 +37,37 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | `npx tsc --noEmit` | ✅ Clean |
 | `npm run build` | ✅ Clean |
 
-**Pre-existing advisory:** `@react-pdf/renderer` produces a >500 kB chunk. Non-blocking. Deferred to CP8.
+---
+
+## CP3 Changes (committed)
+
+- `src/index.css` — 240 lines of auth/onboarding CSS classes; all tokens; no hardcoded hex
+- `src/components/AuthLayout.tsx` — inline styles → CSS classes
+- `src/pages/LoginPage.tsx` — CSS classes; SVG eye icons; explicit label associations
+- `src/pages/SignUpPage.tsx` — CSS classes; SVG eye icons; explicit label associations
+- `src/pages/PasswordResetPage.tsx` — CSS classes; explicit label associations
+- `src/pages/UpdatePasswordPage.tsx` — CSS classes; SVG eye icons; explicit label associations
+- `src/pages/OnboardingPage.tsx` — CSS classes; brand-color helper text; camera SVG
+
+All Supabase auth calls, redirect logic, validation rules, and onboarding writes preserved unchanged.
 
 ---
 
 ## Next Checkpoint
 
-**CP3 — Auth + Onboarding**
-Status: NOT STARTED — awaiting owner authorization.
+**CP4 — Projects**
+Status: **NOT STARTED. Awaiting owner authorization.**
+
+---
+
+## Deferred Issues
+
+| ID | Description | Target |
+|----|-------------|--------|
+| D1 | iPhone Safari/Chrome visual validation | Later mobile QA |
+| D2 | PDF bundle chunk >500 kB (pre-existing, `@react-pdf/renderer`) | CP8 |
+| D3 | Dedicated maskable PWA icons | CP9 |
+| D4 | Browser screenshot automation | Post-launch or explicit authorization |
 
 ---
 
@@ -80,20 +80,9 @@ Owner visual reference material. Do **not** modify, stage, delete, or commit wit
 
 ---
 
-## Deferred Issues
-
-| ID | Description | Target |
-|----|-------------|--------|
-| D1 | PDF bundle chunk >500 kB (pre-existing, `@react-pdf/renderer`) | CP8 |
-| D2 | Dedicated maskable PWA icons | CP9 |
-| D3 | Browser screenshot automation | Post-launch or explicit authorization |
-
----
-
 ## Roadmap
 
 ```
-CP3   Auth + Onboarding
 CP4   Projects
 CP5   Project Detail + report navigation
 CP6   Report Editor + Photo UX

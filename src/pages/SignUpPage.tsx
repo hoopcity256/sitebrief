@@ -3,29 +3,7 @@ import { Link } from 'react-router-dom'
 import { signUp } from '../lib/auth'
 import { sanitizeAuthError } from '../lib/authErrors'
 import { AuthLayout } from '../components/AuthLayout'
-
-const inputStyle: React.CSSProperties = {
-  padding: '12px',
-  borderRadius: '8px',
-  border: '1px solid #DEE2E6',
-  fontSize: '16px',
-  minHeight: '48px',
-  outline: 'none',
-  width: '100%',
-  boxSizing: 'border-box',
-}
-
-const buttonStyle: React.CSSProperties = {
-  minHeight: '48px',
-  background: '#1A5276',
-  color: '#FFFFFF',
-  border: 'none',
-  borderRadius: '8px',
-  fontSize: '16px',
-  fontWeight: 600,
-  cursor: 'pointer',
-  width: '100%',
-}
+import { EyeIcon, EyeOffIcon } from '../components/icons'
 
 export default function SignUpPage() {
   const [email, setEmail] = useState('')
@@ -35,6 +13,7 @@ export default function SignUpPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // Preserve existing validation and signUp logic — unchanged
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -64,37 +43,47 @@ export default function SignUpPage() {
     <AuthLayout
       subtitle="Create your account to start documenting jobsites."
       footer={
-        <Link to="/login" style={linkStyle}>
+        <Link to="/login" className="auth-link">
           Already have an account? <strong>Sign in</strong>
         </Link>
       }
     >
-      {error && <div style={errorStyle}>{error}</div>}
-      {message && <div style={successStyle}>{message}</div>}
+      {error && (
+        <div className="auth-message auth-message--error" role="alert">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="auth-message auth-message--success" role="status">
+          {message}
+        </div>
+      )}
 
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
-      >
-        <label style={labelStyle}>
-          Email
+      <form onSubmit={handleSubmit} className="auth-form">
+        <div className="auth-field">
+          <label htmlFor="signup-email" className="auth-field-label">
+            Email
+          </label>
           <input
             id="signup-email"
+            className="auth-input"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com"
             required
             autoComplete="email"
-            style={inputStyle}
           />
-        </label>
+        </div>
 
-        <label style={labelStyle}>
-          Password
-          <div style={{ position: 'relative' }}>
+        <div className="auth-field">
+          <label htmlFor="signup-password" className="auth-field-label">
+            Password
+          </label>
+          <div className="auth-input-wrap">
             <input
               id="signup-password"
+              className="auth-input auth-input--has-toggle"
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -102,76 +91,27 @@ export default function SignUpPage() {
               required
               minLength={8}
               autoComplete="new-password"
-              style={{ ...inputStyle, paddingRight: '48px' }}
             />
             <button
               type="button"
+              className="auth-pw-toggle"
               onClick={() => setShowPassword(!showPassword)}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
-              style={toggleStyle}
             >
-              {showPassword ? '🙈' : '👁️'}
+              {showPassword ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
             </button>
           </div>
-        </label>
+        </div>
 
         <button
           id="signup-submit"
           type="submit"
           disabled={loading}
-          style={{ ...buttonStyle, opacity: loading ? 0.6 : 1 }}
+          className="auth-btn-primary"
         >
           {loading ? 'Creating account…' : 'Create Account'}
         </button>
       </form>
     </AuthLayout>
   )
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-  fontSize: '14px',
-  fontWeight: 500,
-  color: '#495057',
-}
-
-const errorStyle: React.CSSProperties = {
-  color: '#DC3545',
-  fontSize: '14px',
-  padding: '10px 12px',
-  background: '#FFF3F3',
-  borderRadius: '8px',
-  marginBottom: '16px',
-  lineHeight: 1.4,
-}
-
-const successStyle: React.CSSProperties = {
-  color: '#198754',
-  fontSize: '14px',
-  padding: '10px 12px',
-  background: '#F0FFF4',
-  borderRadius: '8px',
-  marginBottom: '16px',
-  lineHeight: 1.4,
-}
-
-const linkStyle: React.CSSProperties = {
-  color: '#1A5276',
-  textDecoration: 'none',
-  fontSize: '14px',
-}
-
-const toggleStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: '8px',
-  top: '50%',
-  transform: 'translateY(-50%)',
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  fontSize: '18px',
-  padding: '4px',
-  lineHeight: 1,
 }

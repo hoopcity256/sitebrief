@@ -4,35 +4,13 @@ import { resetPassword } from '../lib/auth'
 import { sanitizeAuthError } from '../lib/authErrors'
 import { AuthLayout } from '../components/AuthLayout'
 
-const inputStyle: React.CSSProperties = {
-  padding: '12px',
-  borderRadius: '8px',
-  border: '1px solid #DEE2E6',
-  fontSize: '16px',
-  minHeight: '48px',
-  outline: 'none',
-  width: '100%',
-  boxSizing: 'border-box',
-}
-
-const buttonStyle: React.CSSProperties = {
-  minHeight: '48px',
-  background: '#1A5276',
-  color: '#FFFFFF',
-  border: 'none',
-  borderRadius: '8px',
-  fontSize: '16px',
-  fontWeight: 600,
-  cursor: 'pointer',
-  width: '100%',
-}
-
 export default function PasswordResetPage() {
   const [email, setEmail] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // Preserve existing resetPassword logic — unchanged
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -56,76 +34,48 @@ export default function PasswordResetPage() {
     <AuthLayout
       subtitle="Enter your email and we'll send a link to reset your password."
       footer={
-        <Link to="/login" style={linkStyle}>
+        <Link to="/login" className="auth-link">
           ← Back to Sign In
         </Link>
       }
     >
-      {error && <div style={errorStyle}>{error}</div>}
-      {message && <div style={successStyle}>{message}</div>}
+      {error && (
+        <div className="auth-message auth-message--error" role="alert">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="auth-message auth-message--success" role="status">
+          {message}
+        </div>
+      )}
 
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
-      >
-        <label style={labelStyle}>
-          Email
+      <form onSubmit={handleSubmit} className="auth-form">
+        <div className="auth-field">
+          <label htmlFor="reset-email" className="auth-field-label">
+            Email
+          </label>
           <input
             id="reset-email"
+            className="auth-input"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com"
             required
             autoComplete="email"
-            style={inputStyle}
           />
-        </label>
+        </div>
 
         <button
           id="reset-submit"
           type="submit"
           disabled={loading}
-          style={{ ...buttonStyle, opacity: loading ? 0.6 : 1 }}
+          className="auth-btn-primary"
         >
           {loading ? 'Sending…' : 'Send Reset Link'}
         </button>
       </form>
     </AuthLayout>
   )
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-  fontSize: '14px',
-  fontWeight: 500,
-  color: '#495057',
-}
-
-const errorStyle: React.CSSProperties = {
-  color: '#DC3545',
-  fontSize: '14px',
-  padding: '10px 12px',
-  background: '#FFF3F3',
-  borderRadius: '8px',
-  marginBottom: '16px',
-  lineHeight: 1.4,
-}
-
-const successStyle: React.CSSProperties = {
-  color: '#198754',
-  fontSize: '14px',
-  padding: '10px 12px',
-  background: '#F0FFF4',
-  borderRadius: '8px',
-  marginBottom: '16px',
-  lineHeight: 1.4,
-}
-
-const linkStyle: React.CSSProperties = {
-  color: '#1A5276',
-  textDecoration: 'none',
-  fontSize: '14px',
 }
