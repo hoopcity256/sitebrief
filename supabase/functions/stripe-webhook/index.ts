@@ -14,6 +14,13 @@
  *   - customer.subscription.updated
  *   - customer.subscription.deleted
  *
+ * Duplicate-trial prevention:
+ *   On checkout.session.completed, the PaymentMethod fingerprint is retrieved
+ *   and checked against `trial_redemptions`. If a prior trial was started with
+ *   the same fingerprint by a DIFFERENT user, the new subscription is
+ *   immediately cancelled and the subscription status is set to
+ *   'incomplete_expired'. If same user, it is always allowed (re-subscribe).
+ *
  * Security:
  *   - Signature verified with STRIPE_WEBHOOK_SECRET before any processing.
  *   - Uses service_role key — bypasses RLS intentionally.
@@ -86,12 +93,10 @@ Deno.serve(async (req: Request) => {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session
         // Subscription is provisioned by customer.subscription.created;
-        // here we just ensure the customer → user mapping exists.
+        // here we ensure the customer → user mapping exists and handle
+        // duplicate-trial enforcement.
         if (session.subscription && session.customer) {
-          await upsertSubscriptionById(
-            session.subscription as string,
-            session.customer as string,
-          )
+          await handleCheckoutCompleted(session)
         }
         break
       }
@@ -142,6 +147,158 @@ Deno.serve(async (req: Request) => {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 /**
+ * Handles checkout.session.completed.
+ * - Resolves the user_id + subscription.
+ * - Retrieves the PaymentMethod fingerprint for duplicate-trial detection.
+ * - If a different user already used the same fingerprint for a trial,
+ *   cancels the new subscription immediately and marks it incomplete_expired.
+ * - Otherwise, records a trial_redemptions row and lets upsertSubscription proceed.
+ *
+ * NOTE: The fingerprint check only blocks NEW trialing subscriptions.
+ * It never affects existing subscriptions (grandfathering).
+ */
+async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
+  const subscriptionId = session.subscription as string
+  const customerId = session.customer as string
+
+  // Retrieve full subscription object
+  const sub = await stripe.subscriptions.retrieve(subscriptionId)
+  const userId = await resolveUserId(sub, customerId)
+  if (!userId) {
+    throw new Error(`Cannot resolve user_id for customer ${customerId} / subscription ${subscriptionId}`)
+  }
+
+  // Only apply duplicate-trial enforcement for trialing subscriptions
+  if (sub.status === 'trialing') {
+    const fingerprint = await getPaymentFingerprint(session, sub)
+
+    if (fingerprint) {
+      // Check for an existing trial redemption with this fingerprint by a DIFFERENT user
+      const { data: priorRedemption } = await adminSupabase
+        .from('trial_redemptions')
+        .select('user_id, stripe_subscription_id')
+        .eq('payment_fingerprint', fingerprint)
+        .neq('user_id', userId)
+        .maybeSingle()
+
+      if (priorRedemption) {
+        // Duplicate trial detected from a different account.
+        // Cancel the Stripe subscription immediately.
+        console.warn(
+          `Duplicate trial blocked: fingerprint ${fingerprint} already used by user ${priorRedemption.user_id}. ` +
+          `Cancelling subscription ${subscriptionId} for user ${userId}.`
+        )
+        try {
+          await stripe.subscriptions.cancel(subscriptionId)
+        } catch (cancelErr) {
+          console.error('Failed to cancel duplicate subscription:', cancelErr)
+        }
+        // Record as incomplete_expired in subscriptions table
+        const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null
+        const periodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null
+        await adminSupabase.from('subscriptions').upsert({
+          user_id:                 userId,
+          stripe_customer_id:      customerId,
+          stripe_subscription_id:  subscriptionId,
+          status:                  'incomplete_expired',
+          trial_end:               trialEnd,
+          current_period_end:      periodEnd,
+          cancel_at_period_end:    true,
+          updated_at:              new Date().toISOString(),
+        }, { onConflict: 'user_id' })
+        return
+      }
+    }
+
+    // Record this trial redemption
+    try {
+      const normalizedEmail = session.customer_details?.email?.toLowerCase().trim() ?? null
+      const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null
+      await adminSupabase.from('trial_redemptions').upsert({
+        user_id:               userId,
+        stripe_customer_id:    customerId,
+        normalized_email:      normalizedEmail,
+        payment_fingerprint:   fingerprint ?? null,
+        stripe_subscription_id: subscriptionId,
+        trial_started_at:      new Date().toISOString(),
+        trial_end:             trialEnd,
+      }, { onConflict: 'stripe_subscription_id' })
+    } catch (recordErr) {
+      // Non-fatal: log but don't block the checkout completion
+      console.error('Failed to record trial_redemption:', recordErr)
+    }
+  }
+
+  // Proceed with normal subscription upsert
+  await upsertSubscription(sub, customerId)
+}
+
+/**
+ * Retrieves the Stripe PaymentMethod fingerprint from the checkout session.
+ * The fingerprint is available on the card payment method object after checkout.
+ * Returns null if unavailable (should not block the trial).
+ */
+async function getPaymentFingerprint(
+  session: Stripe.Checkout.Session,
+  sub: Stripe.Subscription
+): Promise<string | null> {
+  try {
+    // Prefer payment_intent's payment_method (most reliable for checkout)
+    if (session.payment_intent) {
+      const pi = await stripe.paymentIntents.retrieve(session.payment_intent as string, {
+        expand: ['payment_method'],
+      })
+      const pm = pi.payment_method as Stripe.PaymentMethod | null
+      if (pm?.card?.fingerprint) return pm.card.fingerprint
+    }
+
+    // Fallback: default payment method on the subscription
+    if (sub.default_payment_method) {
+      const pm = await stripe.paymentMethods.retrieve(sub.default_payment_method as string)
+      if (pm?.card?.fingerprint) return pm.card.fingerprint
+    }
+
+    // Fallback: customer's default payment method
+    const customer = await stripe.customers.retrieve(sub.customer as string, {
+      expand: ['default_source', 'invoice_settings.default_payment_method'],
+    })
+    if (!customer.deleted) {
+      const defaultPm = customer.invoice_settings?.default_payment_method
+      if (typeof defaultPm === 'object' && defaultPm !== null && defaultPm.card?.fingerprint) {
+        return defaultPm.card.fingerprint
+      }
+    }
+  } catch (err) {
+    console.warn('Could not retrieve payment fingerprint:', err)
+  }
+  return null
+}
+
+/**
+ * Resolves the Supabase user_id from a Stripe subscription.
+ */
+async function resolveUserId(sub: Stripe.Subscription, customerId: string): Promise<string | null> {
+  // Try metadata on the subscription first.
+  if (sub.metadata?.supabase_user_id) {
+    return sub.metadata.supabase_user_id
+  }
+
+  // Fall back to the customer object.
+  const customer = await stripe.customers.retrieve(customerId)
+  if (!customer.deleted && customer.metadata?.supabase_user_id) {
+    return customer.metadata.supabase_user_id
+  }
+
+  // Last resort: look up by existing stripe_customer_id.
+  const { data: existing } = await adminSupabase
+    .from('subscriptions')
+    .select('user_id')
+    .eq('stripe_customer_id', customerId)
+    .maybeSingle()
+  return existing?.user_id ?? null
+}
+
+/**
  * Resolves a subscription by ID from Stripe and upserts into `subscriptions`.
  * Used when we have a session but not the full subscription object.
  */
@@ -163,32 +320,7 @@ async function upsertSubscription(
 ): Promise<void> {
   const customerId = overrideCustomerId ?? (sub.customer as string)
 
-  // Resolve user_id from customer metadata or existing subscription row.
-  let userId: string | null = null
-
-  // Try metadata on the subscription first.
-  if (sub.metadata?.supabase_user_id) {
-    userId = sub.metadata.supabase_user_id
-  }
-
-  // Fall back to the customer object.
-  if (!userId) {
-    const customer = await stripe.customers.retrieve(customerId)
-    if (!customer.deleted && customer.metadata?.supabase_user_id) {
-      userId = customer.metadata.supabase_user_id
-    }
-  }
-
-  // Last resort: look up by existing stripe_customer_id.
-  if (!userId) {
-    const { data: existing } = await adminSupabase
-      .from('subscriptions')
-      .select('user_id')
-      .eq('stripe_customer_id', customerId)
-      .maybeSingle()
-    userId = existing?.user_id ?? null
-  }
-
+  const userId = await resolveUserId(sub, customerId)
   if (!userId) {
     throw new Error(
       `Cannot resolve user_id for customer ${customerId} / subscription ${sub.id}`,

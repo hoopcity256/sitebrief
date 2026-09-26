@@ -5,17 +5,45 @@ import { useAuth } from '../context/AuthContext'
 import { useProjects } from '../hooks/useProjects'
 import { createProject, archiveProject } from '../lib/projects'
 import { uploadCoverPhoto, removeCoverPhoto, getCoverPhotoUrl } from '../lib/projectCoverPhoto'
+import { useSubscription } from '../hooks/useSubscription'
+import { redirectToCheckout } from '../lib/subscription'
 import type { ProjectRow } from '../lib/projects'
 import { AppShell } from '../components/AppShell'
 import { PlusIcon, EllipsisHIcon, ArchiveIcon, CameraIcon, XIcon } from '../components/icons'
+
+// Vite inlines these at build time; they are public-safe price IDs.
+const MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_MONTHLY_PRICE_ID as string | undefined
+const ANNUAL_PRICE_ID  = import.meta.env.VITE_STRIPE_ANNUAL_PRICE_ID  as string | undefined
+
 
 // ── ProjectsPage ─────────────────────────────────────────────────────────────
 
 export const ProjectsPage = () => {
   const { user } = useAuth()
   const { projects, loading, error, refetch } = useProjects()
+  const { subscription, loading: subLoading } = useSubscription()
   const navigate = useNavigate()
   const [showForm, setShowForm] = useState(false)
+  const [trialBannerDismissed, setTrialBannerDismissed] = useState(false)
+  const [trialLoading, setTrialLoading] = useState<'monthly' | 'annual' | null>(null)
+  const [trialError, setTrialError] = useState<string | null>(null)
+
+  // Show trial banner to brand-new users (no subscription row at all)
+  const showTrialBanner = !subLoading && !subscription.row && !trialBannerDismissed
+
+  const handleStartTrial = async (plan: 'monthly' | 'annual') => {
+    if (trialLoading) return
+    const priceId = plan === 'monthly' ? MONTHLY_PRICE_ID : ANNUAL_PRICE_ID
+    if (!priceId) { setTrialError('Configuration error. Please contact support.'); return }
+    setTrialLoading(plan)
+    setTrialError(null)
+    try {
+      await redirectToCheckout(priceId)
+    } catch (e: unknown) {
+      setTrialError(e instanceof Error ? e.message : 'Could not start checkout.')
+      setTrialLoading(null)
+    }
+  }
 
   // ── Loading: NS skeleton cards ──────────────────────────────────────────
   if (loading) {
@@ -83,6 +111,47 @@ export const ProjectsPage = () => {
             New Project
           </button>
         </header>
+
+        {/* ── Trial CTA banner — shown to new users with no subscription row ── */}
+        {showTrialBanner && (
+          <div className="trial-banner" role="region" aria-label="Start your free trial">
+            <button
+              className="trial-banner__dismiss"
+              onClick={() => setTrialBannerDismissed(true)}
+              aria-label="Dismiss"
+              type="button"
+            >
+              ✕
+            </button>
+            <p className="trial-banner__title">Start your 14-day free trial</p>
+            <p className="trial-banner__body">
+              Create unlimited reports and PDFs. Cancel anytime — no charge until the trial ends.
+            </p>
+            {trialError && (
+              <p className="trial-banner__error" role="alert">{trialError}</p>
+            )}
+            <div className="trial-banner__actions">
+              <button
+                id="trial-monthly-btn"
+                type="button"
+                className="trial-banner__btn trial-banner__btn--primary"
+                disabled={!!trialLoading}
+                onClick={() => handleStartTrial('monthly')}
+              >
+                {trialLoading === 'monthly' ? 'Redirecting…' : 'Monthly — $9.99/mo'}
+              </button>
+              <button
+                id="trial-annual-btn"
+                type="button"
+                className="trial-banner__btn trial-banner__btn--secondary"
+                disabled={!!trialLoading}
+                onClick={() => handleStartTrial('annual')}
+              >
+                {trialLoading === 'annual' ? 'Redirecting…' : 'Annual — $79.99/yr'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* New Project inline form */}
         {showForm && user && (
@@ -418,29 +487,108 @@ interface NewProjectFormProps {
   onCancel: () => void
 }
 
+/**
+ * Format a raw digit string as a US phone number: (XXX) XXX-XXXX
+ * Called on every keystroke; preserves only digits and reformats.
+ */
+function formatUSPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '').slice(0, 10)
+  if (digits.length === 0) return ''
+  if (digits.length <= 3) return `(${digits}`
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+}
+
+/** Returns true if the string looks like a plausible email. Not RFC-level. */
+function isValidEmail(v: string): boolean {
+  if (!v) return true // Optional field — empty is fine
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())
+}
+
 function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
   const [name, setName]                   = useState('')
   const [customerName, setCustomerName]   = useState('')
   const [address, setAddress]             = useState('')
   const [customerEmail, setCustomerEmail] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
+  const [emailError, setEmailError]       = useState<string | null>(null)
   const [submitting, setSubmitting]       = useState(false)
   const [error, setError]                 = useState<string | null>(null)
 
-  // Business logic preserved verbatim
+  // Cover photo state
+  const [coverFile, setCoverFile]         = useState<File | null>(null)
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
+  const coverInputRef                     = useRef<HTMLInputElement>(null)
+
+  // Cleanup preview URL on unmount
+  useEffect(() => {
+    return () => { if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl) }
+  }, [coverPreviewUrl])
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatUSPhone(e.target.value)
+    setCustomerPhone(formatted)
+  }
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCustomerEmail(e.target.value)
+    setEmailError(null)
+  }
+
+  const handleEmailBlur = () => {
+    if (customerEmail && !isValidEmail(customerEmail)) {
+      setEmailError('Please enter a valid email address.')
+    }
+  }
+
+  const handleCoverSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl)
+    setCoverFile(file)
+    setCoverPreviewUrl(URL.createObjectURL(file))
+  }
+
+  const handleRemoveCoverPreview = () => {
+    if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl)
+    setCoverFile(null)
+    setCoverPreviewUrl(null)
+    if (coverInputRef.current) coverInputRef.current.value = ''
+  }
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!name.trim()) { setError('Project name is required.'); return }
+    if (customerEmail && !isValidEmail(customerEmail)) {
+      setEmailError('Please enter a valid email address.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
-      await createProject(userId, {
+      // Step 1: Create the project
+      const project = await createProject(userId, {
         name: name.trim(),
         customer_name: customerName.trim() || undefined,
         address: address.trim() || undefined,
         customer_email: customerEmail.trim() || undefined,
-        customer_phone: customerPhone.trim() || undefined,
+        customer_phone: customerPhone || undefined,
       })
+
+      // Step 2: Upload cover photo if selected
+      // If this fails, keep the project — show a non-blocking notice.
+      if (coverFile && project?.id) {
+        try {
+          await uploadCoverPhoto(coverFile, userId, project.id)
+        } catch {
+          // Project was created successfully; photo upload failed.
+          // Do not lose the project — onCreated() will still be called.
+          setError('Project created, but cover photo could not be uploaded. You can add it from the project page.')
+          onCreated()
+          return
+        }
+      }
+
       onCreated()
     } catch {
       setError('Could not create project. Please try again.')
@@ -513,12 +661,18 @@ function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
               <input
                 id="project-email"
                 type="email"
-                className="new-project-form__input"
+                className={`new-project-form__input${emailError ? ' new-project-form__input--error' : ''}`}
                 value={customerEmail}
-                onChange={(e) => setCustomerEmail(e.target.value)}
+                onChange={handleEmailChange}
+                onBlur={handleEmailBlur}
                 placeholder="customer@email.com"
                 autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
               />
+              {emailError && (
+                <p className="new-project-form__field-error" role="alert">{emailError}</p>
+              )}
             </div>
 
             <div className="new-project-form__field">
@@ -530,10 +684,48 @@ function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
                 type="tel"
                 className="new-project-form__input"
                 value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
+                onChange={handlePhoneChange}
                 placeholder="(555) 123-4567"
                 autoComplete="off"
+                inputMode="numeric"
               />
+            </div>
+
+            {/* Optional cover photo */}
+            <div className="new-project-form__field">
+              <span className="new-project-form__label">
+                Project Photo
+                <span className="new-project-form__hint"> Optional</span>
+              </span>
+              {coverPreviewUrl ? (
+                <div className="new-project-form__cover-preview">
+                  <img
+                    src={coverPreviewUrl}
+                    alt="Cover preview"
+                    className="new-project-form__cover-img"
+                  />
+                  <button
+                    type="button"
+                    className="new-project-form__cover-remove"
+                    onClick={handleRemoveCoverPreview}
+                    aria-label="Remove cover photo"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <label className="new-project-form__cover-pick">
+                  <input
+                    ref={coverInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleCoverSelect}
+                    style={{ display: 'none' }}
+                  />
+                  <CameraIcon size={16} />
+                  <span>Choose photo</span>
+                </label>
+              )}
             </div>
           </div>
 

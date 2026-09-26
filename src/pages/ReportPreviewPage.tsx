@@ -131,15 +131,52 @@ export const ReportPreviewPage = () => {
 
   // ── PDF generation + share/download ─────────────────────────────────────
 
+  /**
+   * Pre-fetches a signed URL and returns a data-URL string.
+   * @react-pdf/renderer's Image component runs inside a Web Worker and cannot
+   * share the browser's session/CORS context. Converting to data-URL in the
+   * main thread avoids cross-origin issues entirely.
+   */
+  const fetchAsDataUrl = async (url: string): Promise<string> => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Photo fetch failed: ${res.status}`)
+    const blob = await res.blob()
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('FileReader failed'))
+      reader.readAsDataURL(blob)
+    })
+  }
+
   const handlePdfAction = async (mode: 'share' | 'download') => {
     if (!report || pdfState === 'generating') return
     setPdfState('generating')
     setPdfError(null)
 
+    let blob: Blob | null = null
+
     try {
       // Dynamic import — defers the ~1.5 MB @react-pdf/renderer bundle
       // until the user actually requests a PDF.
       const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
+
+      // Pre-fetch all photos as data-URLs in the main thread.
+      // This sidesteps the Web Worker's inability to resolve signed URLs
+      // under restrictive CSP / same-origin constraints.
+      const orderedPhotos = photos.sort((a, b) => a.display_order - b.display_order)
+      const dataUrls: string[] = []
+      for (const p of orderedPhotos) {
+        const signedUrl = photoUrls[p.id]
+        if (!signedUrl) continue
+        try {
+          const dataUrl = await fetchAsDataUrl(signedUrl)
+          dataUrls.push(dataUrl)
+        } catch {
+          // A single photo failure should not block the PDF —
+          // skip it silently; the PDF will contain remaining photos.
+        }
+      }
 
       const pdfData = {
         reportNumber: report.report_number,
@@ -152,21 +189,29 @@ export const ReportPreviewPage = () => {
         workCompleted: report.work_completed,
         problems: report.problems,
         nextSteps: report.next_steps,
-        photoUrls: photos
-          .sort((a, b) => a.display_order - b.display_order)
-          .map(p => photoUrls[p.id])
-          .filter(Boolean),
+        photoUrls: dataUrls,
       }
 
-      const blob = await generateReportPdfBlob(pdfData)
+      blob = await generateReportPdfBlob(pdfData)
       const filename = reportPdfFilename({
         companyName,
         reportNumber: report.report_number,
         createdAt: report.created_at,
       })
 
+      // PDF generated — now attempt share or download separately.
       if (mode === 'share' && canShareFiles()) {
-        await shareBlob(blob, filename, `Report #${report.report_number} — ${projectName}`)
+        try {
+          await shareBlob(blob, filename, `Report #${report.report_number} — ${projectName}`)
+        } catch (shareErr: unknown) {
+          // User cancelling the share sheet is not an error
+          if (shareErr instanceof Error && shareErr.name === 'AbortError') {
+            setPdfState('idle')
+            return
+          }
+          // Share failed but PDF was generated — fall back to download
+          downloadBlob(blob, filename)
+        }
       } else {
         downloadBlob(blob, filename)
       }
@@ -178,9 +223,19 @@ export const ReportPreviewPage = () => {
         setPdfState('idle')
         return
       }
-      setPdfError('Could not generate PDF. Please try again.')
-      setPdfState('idle')
+      // Distinguish: did we get a blob? If yes, share failed. If no, generation failed.
+      if (blob !== null) {
+        setPdfError('PDF was created but could not be shared. Use the Download button instead.')
+      } else {
+        setPdfError('Could not generate PDF. Please try again.')
+      }
+      setPdfState('error')
     }
+  }
+
+  // Download is always available as a standalone fallback
+  const handleDownload = async () => {
+    await handlePdfAction('download')
   }
 
   // ── Loading ──────────────────────────────────────────────────────────────
@@ -215,6 +270,7 @@ export const ReportPreviewPage = () => {
   }
 
   const isGenerating = pdfState === 'generating'
+  const isPdfError = pdfState === 'error'
   const supportsShare = canShareFiles()
 
   return (
@@ -294,7 +350,7 @@ export const ReportPreviewPage = () => {
             </div>
           )}
 
-          {/* Actions */}
+          {/* Actions — Edit + Share/Download */}
           <div style={styles.actions}>
             {/* Edit — always visible */}
             <button
@@ -306,8 +362,8 @@ export const ReportPreviewPage = () => {
               <span>Edit</span>
             </button>
 
-            {/* Share or Download — adaptive */}
-            {supportsShare ? (
+            {/* Share PDF — shown on devices that support file sharing */}
+            {supportsShare && (
               <button
                 id="preview-share-btn"
                 onClick={() => handlePdfAction('share')}
@@ -320,10 +376,13 @@ export const ReportPreviewPage = () => {
                   <><IconShare /><span>Share PDF</span></>
                 )}
               </button>
-            ) : (
+            )}
+
+            {/* Download PDF — shown on desktop OR as fallback when share fails */}
+            {(!supportsShare || isPdfError) && (
               <button
                 id="preview-download-btn"
-                onClick={() => handlePdfAction('download')}
+                onClick={handleDownload}
                 disabled={isGenerating}
                 style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
               >

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useCompanyProfile } from '../hooks/useCompanyProfile'
 import { upsertCompanyProfile } from '../lib/companyProfile'
 import { BuildingIcon } from '../components/icons'
 
@@ -12,6 +13,7 @@ import { BuildingIcon } from '../components/icons'
  */
 export const OnboardingPage = () => {
   const { user } = useAuth()
+  const { setProfile } = useCompanyProfile()
   const navigate = useNavigate()
 
   const [companyName, setCompanyName] = useState('')
@@ -34,13 +36,17 @@ export const OnboardingPage = () => {
     setError(null)
 
     try {
-      await upsertCompanyProfile(user.id, {
+      const saved = await upsertCompanyProfile(user.id, {
         company_name: companyName.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
         brand_color: brandColor || null,
         onboarding_complete: true,
       })
+      // FIX: Update the AuthGuard's cached profile BEFORE navigating.
+      // Without this, AuthGuard still sees onboarding_complete=false from
+      // the initial fetch and redirects the user back to /onboarding.
+      setProfile(saved)
       navigate('/projects')
     } catch {
       setError('Could not save your company profile. Please try again.')

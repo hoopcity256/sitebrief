@@ -1460,6 +1460,65 @@ ul, ol { list-style: none; padding: 0; margin: 0; }
 .new-project-form__submit:hover:not(:disabled) { background: var(--color-primary-hover); }
 .new-project-form__submit:disabled { opacity: 0.50; cursor: not-allowed; }
 
+/* Email error and hint */
+.new-project-form__input--error {
+  border-color: var(--color-danger);
+  outline-color: var(--color-danger);
+}
+.new-project-form__field-error {
+  font-size: 12px;
+  color: var(--color-danger);
+  margin: 4px 0 0;
+}
+.new-project-form__hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* Cover photo UI in new-project form */
+.new-project-form__cover-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1.5px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.new-project-form__cover-pick:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.new-project-form__cover-preview {
+  position: relative;
+  display: inline-block;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.new-project-form__cover-img {
+  display: block;
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+.new-project-form__cover-remove {
+  margin-top: 6px;
+  background: none;
+  border: none;
+  color: var(--color-danger);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-decoration: underline;
+}
+
 /* Small inline spinner for archiving state */
 .spinner-sm {
   width: 16px;
@@ -1945,6 +2004,88 @@ ul, ol { list-style: none; padding: 0; margin: 0; }
   padding: 0;
 }
 
+/* ── Trial CTA Banner ──────────────────────────────────────────────────────── */
+
+.trial-banner {
+  position: relative;
+  margin: 0 16px 16px;
+  padding: 20px 20px 20px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, #2471a3 100%);
+  border-radius: var(--radius-lg);
+  color: #fff;
+}
+
+.trial-banner__dismiss {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(255,255,255,0.15);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.15s;
+}
+.trial-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
+
+.trial-banner__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  padding-right: 32px;
+}
+
+.trial-banner__body {
+  font-size: 13px;
+  margin: 0 0 16px;
+  opacity: 0.9;
+  line-height: 1.5;
+}
+
+.trial-banner__error {
+  font-size: 12px;
+  color: #ffe0e0;
+  margin: 0 0 10px;
+}
+
+.trial-banner__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.trial-banner__btn {
+  min-height: 44px;
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.trial-banner__btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.trial-banner__btn--primary {
+  background: #fff;
+  color: var(--color-primary);
+}
+.trial-banner__btn--primary:hover:not(:disabled) { opacity: 0.92; }
+
+.trial-banner__btn--secondary {
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+  border: 1.5px solid rgba(255,255,255,0.4);
+}
+.trial-banner__btn--secondary:hover:not(:disabled) { background: rgba(255,255,255,0.28); }
 /* ── Skeleton loader ── */
 .detail-skeleton {
   display: flex;

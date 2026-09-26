@@ -12,8 +12,9 @@ _Update this file at every checkpoint commit. Git state is the source of truth._
 
 ## Current Accepted Baseline
 
-`b89574e  feat(ui): complete North Star auth and onboarding`
+`31fb6be  chore(deploy): complete hosted sandbox deployment`
 Branch: `main` | Remote: `origin/main` in sync: **yes**
+Working tree: **modified — E2E hardening in progress (uncommitted)**
 
 ---
 
@@ -30,17 +31,42 @@ Branch: `main` | Remote: `origin/main` in sync: **yes**
 | CP5 | `1937f89` | Project Detail + Report History Navigation |
 | **NS+CP6** | **`84d8ab9`** | **North Star visual transformation + CP6 editor + project cover photos** |
 | **NS Auth** | **`b89574e`** | **North Star auth + onboarding redesign — OWNER APPROVED** |
+| **Deploy** | **`31fb6be`** | **Hosted sandbox deployment complete** |
+| **E2E Hardening** | *(pending commit)* | **Onboarding, PDF, phone/email/cover, trial funnel, duplicate-trial prevention** |
 
 ---
 
 ## Current Checkpoint
 
-### HOSTED SANDBOX DEPLOYMENT — LIVE ✅
+### HOSTED MOBILE E2E HARDENING — DEPLOYED TO SANDBOX ✅
 
-**Accepted baseline:** `b89574e  feat(ui): complete North Star auth and onboarding`
-**Status:** DEPLOYED — `https://sitebrief-sandbox.pages.dev`
+**Prior baseline:** `31fb6be  chore(deploy): complete hosted sandbox deployment`
+**Sandbox:** `https://sitebrief-sandbox.pages.dev`
 
 #### What this checkpoint delivers
+
+| Area | Bug/Feature | Fix |
+|------|-------------|-----|
+| Onboarding redirect | Submit tapped → stayed on onboarding (looked like a refresh) | Fixed: `OnboardingPage` now calls `setProfile(saved)` from `useCompanyProfile` before `navigate('/projects')`. This updates AuthGuard's cached profile synchronously, preventing the stale-profile redirect loop. |
+| PDF generation on mobile | "Could not generate PDF. Please try again." on every attempt | Fixed: pre-fetch all signed photo URLs as data-URLs in the main thread before calling `generateReportPdfBlob`. Eliminates Web Worker CORS/CSP issues. `public/_headers` CSP updated with `worker-src blob:` and `script-src blob:`. |
+| PDF share vs generate error | All errors (generation AND share failures) collapsed into same message | Fixed: `blob` variable initialized to `null`; inner share failure caught separately. Generation fail → "Could not generate PDF". Share fail → "PDF was created but could not be shared. Use the Download button instead." + Download button appears on iOS share failure. |
+| Download PDF fallback | No download option on mobile if sharing fails | Fixed: Download PDF button appears alongside Share PDF when `pdfState === 'error'`, and always shows on non-share-capable devices. |
+| New Project — phone formatting | No formatting on phone input | Fixed: `formatUSPhone()` live-reformats as user types → `(555) 123-4567`. Digits only stored. |
+| New Project — email validation | No email validation | Fixed: inline validation on blur + on submit. No `alert()`. Red border + error message below field. Blocks submission if invalid. |
+| New Project — cover photo | No cover photo at creation time | Fixed: optional photo picker in New Project form. Sequence: create project → upload cover using project.id → navigate. If upload fails: project is kept, contextual error shown, user directed to project page to add photo later. |
+| Trial funnel | New users discover "subscription required" only when trying to create a report | Fixed: prominent `TrialBanner` shown on Projects page for users with no subscription row (`subscription.row === null`). Monthly + Annual buttons go directly to Stripe Checkout. Dismissable. |
+| Duplicate trial prevention | Same card can start multiple trials on different accounts | Fixed: `trial_redemptions` table tracks payment method fingerprints. `stripe-webhook` checks fingerprint on `checkout.session.completed`; duplicate found → subscription immediately cancelled + set to `incomplete_expired`. Fingerprint retrieved from payment intent, subscription default PM, or customer default PM (with fallbacks). |
+| Trial cancellation safety | Cancel during trial may revoke access immediately | Verified: `cancel_at_period_end=true` used by Stripe; `has_active_access()` checks `trial_end > now()` independently of cancel flag — no change needed. |
+
+#### Infrastructure applied to sandbox
+
+| Item | Detail |
+|------|--------|
+| `trial_redemptions` migration | Applied to `toitahshmkxazxqqopzg` — new table with fingerprint index, RLS enabled (no browser policies) |
+| `stripe-webhook` Edge Function | Redeployed to `toitahshmkxazxqqopzg` with duplicate-trial detection |
+| Cloudflare Pages | Deployed preview `https://16c3761a.sitebrief-sandbox.pages.dev` |
+
+#### Quality gate
 
 | Area | Detail |
 |------|--------|
