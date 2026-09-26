@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 *.tsbuildinfo
+
+# Internal design reference assets — must never be committed
+# (large binaries, owner-private brand assets)
+North Star/
