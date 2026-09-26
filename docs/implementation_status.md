@@ -63,34 +63,68 @@ Working tree: **modified — E2E hardening in progress (uncommitted)**
 | Item | Detail |
 |------|--------|
 | `trial_redemptions` migration | Applied to `toitahshmkxazxqqopzg` — new table with fingerprint index, RLS enabled (no browser policies) |
+| `company_logos_bucket` migration | Applied to `toitahshmkxazxqqopzg` — private `company-logos` bucket, ownership-scoped RLS policies |
 | `stripe-webhook` Edge Function | Redeployed to `toitahshmkxazxqqopzg` with duplicate-trial detection |
-| Cloudflare Pages | Deployed preview `https://16c3761a.sitebrief-sandbox.pages.dev` |
+| Cloudflare Pages | Deployed `https://sitebrief-sandbox.pages.dev` — current deployment: `d39c6a3` |
 
-#### Quality gate
+---
 
-| Area | Detail |
-|------|--------|
-| ProjectsPage image-first redesign | 120px cover photo or initials-fallback, shadow card, no borders, pill "New Project" CTA |
-| Whole-card navigation | `div[role=button][tabIndex=0]` — entire card (image + text) navigates to `/projects/{id}`. Enter/Space keyboard supported. `focus-visible` ring. No nested `<button>`. |
-| Project cover photos — Add/Change/Remove | Three-dot overflow menu: "Add/Change project photo" + "Remove photo" (conditional). `projectCoverPhoto.ts` lib: compress → upload → signed URL. Inline error state (no `alert()`). |
-| ProjectDetailPage hero redesign | 200px full-bleed hero image, overlaid 48×48 back button, single "Edit photo" pill → Change/Remove popover. No cover: "Add photo". |
-| Report history redesign | Grouped card with dividers, no stray bullets (`ul { list-style: none }`), Draft→editor, Final→preview, entire row keyboard/click accessible |
-| MorePage redesign | Inline styles → CSS classes (`more-*`). All billing/subscription logic preserved verbatim. |
-| AppShell/navigation visual refinement | Solid white tab bar (no frosted glass), 1.5px top border, active dot indicator, semibold active label |
-| CP6 Report Editor | 48×48 back button, primary-color "Mark as Final", two-layer photo-delete, autosave, IDB recovery, auto-grow textareas, max 10 photos, sticky finalize, no `capture="environment"` |
-| Sandbox cover-photo migration | `supabase/migrations/20260925000000_project_cover_photos.sql` applied to `toitahshmkxazxqqopzg`. `cover_photo_path TEXT NULLABLE`, private `project-covers` bucket, 4 ownership RLS policies. |
-| Real-photo owner visual review | Completed. NS visual direction approved with actual project photograph. |
+## HARDENING PASS 2 — REAL iPHONE RETEST FINDINGS + FIXES ✅
 
-#### Quality gate
+**Commit:** `d39c6a3 fix(app): complete hosted mobile hardening pass 2`
+**Sandbox:** `https://sitebrief-sandbox.pages.dev`
+**Sandbox Supabase:** `toitahshmkxazxqqopzg`
+
+### Root Cause Discoveries
+
+| # | Issue | Root Cause |
+|---|-------|-----------|
+| 1 | Onboarding bounce | `OnboardingPage` and `AuthGuard` each called `useCompanyProfile()` as **independent hook instances** with isolated state. `setProfile()` in OnboardingPage only updated its own instance. AuthGuard still saw `onboarding_complete=false` and redirected back. |
+| 2 | Auth "check email" mismatch | `config.toml` line 226: `enable_confirmations = false`. Sandbox does NOT require email confirmation. `signUp()` returns a session immediately. But the UI always showed "Check your email…" regardless. |
+| 3 | PDF instrumentation needed | PDF pipeline was a single try/catch — exact failing stage unknown. Added 11-stage logging. |
+| 4 | Download PDF not visible | Download PDF was hidden behind `(!supportsShare || isPdfError)`. On iPhone (supportsShare=true), it was invisible until Share failed. |
+| 5 | Nav icon artifact | `.tab-item--active .tab-item__icon::after` positioned at `bottom: -4px` overflowed 2px past the icon container into the 2px `gap` before the label text. |
+| 6 | Email validation | `@` alone accepted on some browsers. No shared validator — each page had its own regex or just `type="email"`. |
+| 7 | Phone formatting | `formatUSPhone()` existed only in `ProjectsPage.tsx`. Onboarding had raw `type="tel"` with no formatting. |
+
+### Fixes Applied
+
+| Area | Fix |
+|------|-----|
+| **Onboarding architecture** | Created `src/context/CompanyProfileContext.tsx` — shared Context that both `AuthGuard` and `OnboardingPage` consume. `setProfile()` now updates state visible to all consumers. `useCompanyProfile.ts` re-exports from Context for backwards compatibility. |
+| **Onboarding instrumentation** | Console logging added: `[onboarding] submit started`, `upsert start`, `upsert success`, `setProfile called, navigating`. Logs: boolean flags only, no PII. |
+| **Auth flow** | `SignUpPage` now inspects `data.session`. Session returned → navigate to `/onboarding` (no "check email"). No session → dedicated `check-email` state, Create Account button locked. |
+| **Confirm Password** | Added second password field to signup with: inline mismatch error, Create Account disabled until match, `aria-describedby` for accessibility. Confirm Password never sent to Supabase. |
+| **PDF 11-stage instrumentation** | `ReportPreviewPage` now logs exact stage, error, photo count, MIME type, Blob size. Stages: load report → load profile → load project → resolve photos → create signed URLs → fetch images → convert to data URLs → construct PDF data → render Blob → validate → share/download. HEIC/HEIF files detected and skipped with `console.warn`. |
+| **Download always visible** | Both Share PDF and Download PDF buttons always shown from start. They share the same generated `Blob` — no duplicate generation. |
+| **PDF error states** | Four distinct states: `generating`, `generation-failed`, `share-failed`, `download-failed`. Only generation-failed disables Download. |
+| **Shared email validator** | `src/lib/validation.ts`: `isValidEmail()` — pragmatic regex, rejects `john@`, `@company.com`, `john@company`, `john@.com`, `john@company.`, `@`. Applied to: signup, password reset, onboarding, project forms. |
+| **Shared phone formatter** | `src/lib/validation.ts`: `formatUSPhone()`, `normalizeUSPhone()`. Applied to: onboarding and project forms. Duplicate local copies removed from `ProjectsPage.tsx`. |
+| **Company logo in onboarding** | Optional logo upload to private `company-logos` Supabase bucket. Compressed before upload (max 400 KB). Preview + Change + Remove. `logo_storage_path` already existed in DB types. |
+| **Nav icon artifact** | Replaced `::after` bottom-overflow dot with `::before` top-bar on `.tab-item`. Added `position: relative` and `overflow: hidden` to `.tab-item`. |
+
+### Quality Gate
 
 | Gate | Result |
 |------|--------|
-| `npm test -- --run` | ✅ 37/37 passing (9 files) |
+| `npm test -- --run` | ✅ **74/74 passing** (11 test files) |
 | `npx tsc --noEmit` | ✅ 0 errors |
-| `npm run build` | ✅ Clean (PDF chunk >500 kB is pre-existing D2) |
+| `npm run build` | ✅ Clean (PDF chunk warning is pre-existing, D2) |
 | `git diff --check` | ✅ Clean |
-| `North Star/` untracked | ✅ Confirmed — not staged, not committed |
 | Production (`qbycpzfyugrsbckrpyak`) | ✅ Untouched |
+| Sandbox DB | ✅ `company_logos_bucket` migration applied |
+
+### Manual PDF Diagnostic Required (Owner)
+
+Before declaring PDF fixed, verify against these three scenarios on real iPhone:
+
+| Test | What to do | Pass condition |
+|------|------------|----------------|
+| A — text only | Create a new finalized report with NO photos | PDF generates and Share/Download both work |
+| B — one JPEG photo | Add one project photo, finalize, PDF | PDF includes the photo |
+| C — multiple photos | Multiple photos, finalize, PDF | All photos appear |
+
+Open Safari DevTools → Console before testing to capture `[pdf:*]` logs identifying the exact failing stage.
 
 ---
 
