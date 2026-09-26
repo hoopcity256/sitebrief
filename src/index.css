@@ -223,6 +223,7 @@ button:focus-visible {
   transition: color var(--transition-fast);
   min-height: 44px;
   min-width: 44px;
+  position: relative; /* required for ::before active indicator */
 }
 
 .tab-item--active {
@@ -245,17 +246,28 @@ button:focus-visible {
   position: relative;
 }
 
-/* Active indicator dot beneath icon */
-.tab-item--active .tab-item__icon::after {
+/* Active indicator: 3px bar above the icon, within the tab bar itself.
+   Positioned on the tab-item button (not on the icon) to avoid overflow
+   between icon and label. overflow: hidden on .tab-item clips it cleanly. */
+.tab-item {
+  overflow: hidden; /* clip the ::before indicator */
+}
+
+.tab-item--active::before {
   content: '';
   position: absolute;
-  bottom: -4px;
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
+  width: 24px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
   background: var(--color-primary);
+}
+
+/* Remove the old ::after dot on the icon — replaced by ::before on tab-item */
+.tab-item--active .tab-item__icon::after {
+  display: none;
 }
 
 .tab-item__label {
@@ -759,6 +771,81 @@ button, a, [role="button"] {
   color: var(--color-text-muted);
   margin-top: var(--space-1);
   line-height: var(--leading-snug);
+}
+
+/* Inline field-level error message */
+.auth-field-error {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  margin-top: var(--space-1);
+  line-height: var(--leading-snug);
+}
+
+/* Input error state border */
+.auth-input--error {
+  border-color: var(--color-danger);
+  outline-color: var(--color-danger);
+}
+
+/* Logo picker — looks like cover photo pick button */
+.onboarding-logo-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+  margin-top: var(--space-1);
+}
+.onboarding-logo-pick:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+/* Logo preview container */
+.onboarding-logo-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.onboarding-logo-preview__img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+}
+.onboarding-logo-preview__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.onboarding-logo-preview__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+}
+.onboarding-logo-preview__btn--remove {
+  color: var(--color-danger);
 }
 
 /* Password Reset -- email-sent success state */

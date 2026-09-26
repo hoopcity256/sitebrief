@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { resetPassword } from '../lib/auth'
 import { sanitizeAuthError } from '../lib/authErrors'
+import { isValidEmail } from '../lib/validation'
 import { AuthLayout } from '../components/AuthLayout'
 import { MailIcon } from '../components/icons'
 
@@ -17,6 +18,12 @@ export default function PasswordResetPage() {
     e.preventDefault()
     setError('')
     setMessage('')
+
+    if (!isValidEmail(email)) {
+      setError('Please enter a valid email address.')
+      return
+    }
+
     setLoading(true)
     try {
       const { error: authError } = await resetPassword(email)

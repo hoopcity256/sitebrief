@@ -1,3 +1,37 @@
+/**
+ * ReportPreviewPage
+ *
+ * PDF Generation Architecture (hardening pass 2):
+ *
+ * Both "Share PDF" and "Download PDF" are always visible.
+ * They share the same generated Blob to avoid redundant generation.
+ *
+ * PDF generation is broken into explicit numbered stages with
+ * console.log instrumentation so the EXACT failing stage is captured:
+ *
+ *   [pdf:1] load report
+ *   [pdf:2] load company profile
+ *   [pdf:3] load project
+ *   [pdf:4] resolve report photos
+ *   [pdf:5] create signed URLs
+ *   [pdf:6] fetch each image (shows count)
+ *   [pdf:7] convert each image to data URL (shows MIME)
+ *   [pdf:8] construct ReportPdfData
+ *   [pdf:9] render document to Blob (shows size/type)
+ *   [pdf:10] validate Blob
+ *   [pdf:11] share or download
+ *
+ * Only stage name, error type/message, counts, and Blob metadata are logged.
+ * NO signed URLs, auth tokens, or image data are logged.
+ *
+ * State machine:
+ *   idle           → buttons available
+ *   generating     → spinner shown on active button; other button disabled
+ *   blob-ready     → Blob in memory; if share fails, Download remains usable
+ *   share-failed   → Share PDF shows error; Download PDF still works
+ *   download-failed → Download PDF shows error
+ *   generation-failed → both show error with retry
+ */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getReport, listPhotosForReport } from '../lib/reports'
@@ -27,6 +61,16 @@ interface PhotoData {
   storage_path: string
   display_order: number
 }
+
+// ── PDF generation state ────────────────────────────────────────────────────
+
+type PdfStatus =
+  | 'idle'
+  | 'generating'
+  | 'generation-failed'
+  | 'blob-ready'
+  | 'share-failed'
+  | 'download-failed'
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────
 
@@ -83,16 +127,17 @@ export const ReportPreviewPage = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // PDF / share state
-  const [pdfState, setPdfState] = useState<'idle' | 'generating' | 'error'>('idle')
+  // PDF state
+  const [pdfStatus, setPdfStatus] = useState<PdfStatus>('idle')
   const [pdfError, setPdfError] = useState<string | null>(null)
+  // Cached Blob — reused for Download when Share fails
+  const [cachedBlob, setCachedBlob] = useState<{ blob: Blob; filename: string } | null>(null)
 
   const loadReport = useCallback(async () => {
     if (!reportId) return
     setLoading(true)
     setError(null)
     try {
-      // Load report, project, and company profile in parallel
       const r = await getReport(reportId) as ReportData
       setReport(r)
 
@@ -109,7 +154,6 @@ export const ReportPreviewPage = () => {
 
       setPhotos(photoList)
 
-      // Load signed URLs for all photos
       const urls: Record<string, string> = {}
       await Promise.all(
         photoList.map(async (photo) => {
@@ -129,116 +173,206 @@ export const ReportPreviewPage = () => {
 
   useEffect(() => { loadReport() }, [loadReport])
 
-  // ── PDF generation + share/download ─────────────────────────────────────
+  // ── PDF generation pipeline ──────────────────────────────────────────────
 
   /**
-   * Pre-fetches a signed URL and returns a data-URL string.
-   * @react-pdf/renderer's Image component runs inside a Web Worker and cannot
-   * share the browser's session/CORS context. Converting to data-URL in the
-   * main thread avoids cross-origin issues entirely.
+   * Stage 7: Fetch a signed URL, convert to data URL.
+   *
+   * @react-pdf/renderer v4 uses a Web Worker which cannot resolve
+   * Supabase signed URLs (CORS + CSP constraints in worker context).
+   * Converting to data URL in the main thread avoids this entirely.
+   *
+   * Logs MIME type to detect HEIC/HEIF from iPhone uploads.
+   * iPhone HEIC that was compressed through our pipeline should be JPEG
+   * (compressImage always uses canvas.toBlob('image/jpeg')).
    */
-  const fetchAsDataUrl = async (url: string): Promise<string> => {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`Photo fetch failed: ${res.status}`)
-    const blob = await res.blob()
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = () => reject(new Error('FileReader failed'))
-      reader.readAsDataURL(blob)
-    })
-  }
-
-  const handlePdfAction = async (mode: 'share' | 'download') => {
-    if (!report || pdfState === 'generating') return
-    setPdfState('generating')
-    setPdfError(null)
-
-    let blob: Blob | null = null
-
+  const fetchPhotoAsDataUrl = async (
+    signedUrl: string,
+    photoIndex: number,
+  ): Promise<string | null> => {
     try {
-      // Dynamic import — defers the ~1.5 MB @react-pdf/renderer bundle
-      // until the user actually requests a PDF.
-      const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
+      console.log(`[pdf:7] fetching photo ${photoIndex}`)
+      const res = await fetch(signedUrl, { mode: 'cors' })
+      if (!res.ok) {
+        console.warn(`[pdf:7] photo ${photoIndex} fetch failed: HTTP ${res.status}`)
+        return null
+      }
 
-      // Pre-fetch all photos as data-URLs in the main thread.
-      // This sidesteps the Web Worker's inability to resolve signed URLs
-      // under restrictive CSP / same-origin constraints.
-      const orderedPhotos = photos.sort((a, b) => a.display_order - b.display_order)
-      const dataUrls: string[] = []
-      for (const p of orderedPhotos) {
-        const signedUrl = photoUrls[p.id]
-        if (!signedUrl) continue
-        try {
-          const dataUrl = await fetchAsDataUrl(signedUrl)
-          dataUrls.push(dataUrl)
-        } catch {
-          // A single photo failure should not block the PDF —
-          // skip it silently; the PDF will contain remaining photos.
+      const blob = await res.blob()
+      const mime = blob.type || 'unknown'
+      const sizekb = Math.round(blob.size / 1024)
+      console.log(`[pdf:7] photo ${photoIndex} fetched — MIME: ${mime}, size: ${sizekb} KB`)
+
+      // HEIC/HEIF cannot be rendered by @react-pdf/renderer — skip them.
+      // Our compressImage pipeline should have converted them to JPEG,
+      // but verify here as a safety net.
+      if (mime.includes('heic') || mime.includes('heif')) {
+        console.warn(`[pdf:7] photo ${photoIndex} is HEIC/HEIF — skipping (not renderable in PDF)`)
+        return null
+      }
+
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => {
+          console.warn(`[pdf:7] photo ${photoIndex} FileReader failed`)
+          reject(new Error('FileReader failed'))
         }
-      }
-
-      const pdfData = {
-        reportNumber: report.report_number,
-        isDraft: report.is_draft,
-        createdAt: report.created_at,
-        companyName,
-        projectName,
-        customerName,
-        address,
-        workCompleted: report.work_completed,
-        problems: report.problems,
-        nextSteps: report.next_steps,
-        photoUrls: dataUrls,
-      }
-
-      blob = await generateReportPdfBlob(pdfData)
-      const filename = reportPdfFilename({
-        companyName,
-        reportNumber: report.report_number,
-        createdAt: report.created_at,
+        reader.readAsDataURL(blob)
       })
-
-      // PDF generated — now attempt share or download separately.
-      if (mode === 'share' && canShareFiles()) {
-        try {
-          await shareBlob(blob, filename, `Report #${report.report_number} — ${projectName}`)
-        } catch (shareErr: unknown) {
-          // User cancelling the share sheet is not an error
-          if (shareErr instanceof Error && shareErr.name === 'AbortError') {
-            setPdfState('idle')
-            return
-          }
-          // Share failed but PDF was generated — fall back to download
-          downloadBlob(blob, filename)
-        }
-      } else {
-        downloadBlob(blob, filename)
-      }
-
-      setPdfState('idle')
-    } catch (e: unknown) {
-      // User cancelling the share sheet is not an error
-      if (e instanceof Error && e.name === 'AbortError') {
-        setPdfState('idle')
-        return
-      }
-      // Distinguish: did we get a blob? If yes, share failed. If no, generation failed.
-      if (blob !== null) {
-        setPdfError('PDF was created but could not be shared. Use the Download button instead.')
-      } else {
-        setPdfError('Could not generate PDF. Please try again.')
-      }
-      setPdfState('error')
+    } catch (err: unknown) {
+      console.warn(`[pdf:7] photo ${photoIndex} error:`, err instanceof Error ? err.message : err)
+      return null
     }
   }
 
-  // Download is always available as a standalone fallback
-  const handleDownload = async () => {
-    await handlePdfAction('download')
+  /**
+   * Generate the PDF Blob. Returns the Blob and filename.
+   * Throws with a descriptive stage-annotated error on failure.
+   */
+  const generatePdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
+    if (!report) throw new Error('[pdf] no report loaded')
+
+    console.log('[pdf:8] constructing PDF data')
+    const orderedPhotos = [...photos].sort((a, b) => a.display_order - b.display_order)
+
+    // Stage 6: count how many photos have signed URLs
+    const availablePhotoCount = orderedPhotos.filter(p => photoUrls[p.id]).length
+    console.log(`[pdf:6] photos with signed URLs: ${availablePhotoCount} of ${orderedPhotos.length}`)
+
+    // Stage 7: convert all available photos to data URLs
+    const dataUrls: string[] = []
+    for (let i = 0; i < orderedPhotos.length; i++) {
+      const p = orderedPhotos[i]
+      const signedUrl = photoUrls[p.id]
+      if (!signedUrl) {
+        console.log(`[pdf:7] photo ${i} has no signed URL — skipping`)
+        continue
+      }
+      const dataUrl = await fetchPhotoAsDataUrl(signedUrl, i)
+      if (dataUrl) {
+        dataUrls.push(dataUrl)
+      }
+    }
+
+    console.log(`[pdf:8] data URLs resolved: ${dataUrls.length}`)
+
+    // Stage 8: build PDF data object
+    const pdfData = {
+      reportNumber: report.report_number,
+      isDraft: report.is_draft,
+      createdAt: report.created_at,
+      companyName,
+      projectName,
+      customerName,
+      address,
+      workCompleted: report.work_completed,
+      problems: report.problems,
+      nextSteps: report.next_steps,
+      photoUrls: dataUrls,
+    }
+
+    // Stage 9: render to Blob (dynamic import keeps bundle small)
+    console.log('[pdf:9] importing @react-pdf/renderer and rendering')
+    const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
+
+    const blob = await generateReportPdfBlob(pdfData)
+
+    // Stage 10: validate Blob
+    const blobSizeKb = Math.round(blob.size / 1024)
+    const blobType = blob.type
+    console.log(`[pdf:10] blob produced — size: ${blobSizeKb} KB, type: ${blobType}`)
+
+    if (blob.size === 0) {
+      throw new Error('[pdf:10] generated Blob is empty (0 bytes)')
+    }
+    if (!blobType.includes('pdf')) {
+      console.warn(`[pdf:10] unexpected blob type: ${blobType}`)
+    }
+
+    const filename = reportPdfFilename({
+      companyName,
+      reportNumber: report.report_number,
+      createdAt: report.created_at,
+    })
+
+    return { blob, filename }
   }
 
-  // ── Loading ──────────────────────────────────────────────────────────────
+  // ── Share PDF ─────────────────────────────────────────────────────────────
+
+  const handleShare = async () => {
+    if (pdfStatus === 'generating') return
+    setPdfError(null)
+    setPdfStatus('generating')
+
+    try {
+      let blobPair = cachedBlob
+
+      // Stage 9: generate if not already cached
+      if (!blobPair) {
+        blobPair = await generatePdfBlob()
+        setCachedBlob(blobPair)
+        setPdfStatus('blob-ready')
+      }
+
+      // Stage 11: share
+      console.log('[pdf:11] attempting Web Share API')
+      await shareBlob(
+        blobPair.blob,
+        blobPair.filename,
+        `Report #${report!.report_number} — ${projectName}`,
+      )
+      setPdfStatus('idle')
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        // User dismissed the share sheet — not an error
+        setPdfStatus(cachedBlob ? 'blob-ready' : 'idle')
+        return
+      }
+      const msg = e instanceof Error ? e.message : String(e)
+      const isGenFail = msg.startsWith('[pdf:')
+      console.error('[pdf] error:', msg)
+
+      if (isGenFail || !cachedBlob) {
+        setPdfError('Could not generate PDF. See console for the exact failing stage.')
+        setPdfStatus('generation-failed')
+      } else {
+        // PDF was generated but share failed (Web Share API issue)
+        setPdfError('Share failed. Use Download PDF to save to your device.')
+        setPdfStatus('share-failed')
+      }
+    }
+  }
+
+  // ── Download PDF ──────────────────────────────────────────────────────────
+
+  const handleDownload = async () => {
+    if (pdfStatus === 'generating') return
+    setPdfError(null)
+    setPdfStatus('generating')
+
+    try {
+      let blobPair = cachedBlob
+
+      if (!blobPair) {
+        blobPair = await generatePdfBlob()
+        setCachedBlob(blobPair)
+        setPdfStatus('blob-ready')
+      }
+
+      console.log('[pdf:11] triggering download')
+      downloadBlob(blobPair.blob, blobPair.filename)
+      setPdfStatus('idle')
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[pdf] download error:', msg)
+      setPdfError('Download failed. Please try again.')
+      setPdfStatus('download-failed')
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -269,9 +403,13 @@ export const ReportPreviewPage = () => {
     )
   }
 
-  const isGenerating = pdfState === 'generating'
-  const isPdfError = pdfState === 'error'
+  const isGenerating = pdfStatus === 'generating'
   const supportsShare = canShareFiles()
+
+  // Status label for generating button
+  const generatingLabel = (
+    <><div style={styles.spinnerBtn} /><span>Generating PDF…</span></>
+  )
 
   return (
     <AppShell activeTab="projects">
@@ -297,7 +435,7 @@ export const ReportPreviewPage = () => {
             <span>{new Date(report.created_at).toLocaleDateString()}</span>
           </div>
 
-          {/* Content sections */}
+          {/* Content */}
           {report.work_completed && (
             <div style={styles.section}>
               <h2 style={styles.sectionTitle}>Work Completed</h2>
@@ -343,14 +481,14 @@ export const ReportPreviewPage = () => {
             </div>
           )}
 
-          {/* PDF error */}
+          {/* PDF error / status */}
           {pdfError && (
             <div style={styles.pdfError} role="alert">
               {pdfError}
             </div>
           )}
 
-          {/* Actions — Edit + Share/Download */}
+          {/* Actions */}
           <div style={styles.actions}>
             {/* Edit — always visible */}
             <button
@@ -362,40 +500,40 @@ export const ReportPreviewPage = () => {
               <span>Edit</span>
             </button>
 
-            {/* Share PDF — shown on devices that support file sharing */}
+            {/*
+              PRODUCT DECISION: Download PDF is ALWAYS visible from the start.
+              Share PDF is shown on devices that support the Web Share API.
+              Both share the same Blob when it has been generated.
+            */}
+
+            {/* Share PDF — only on devices that support it */}
             {supportsShare && (
               <button
                 id="preview-share-btn"
-                onClick={() => handlePdfAction('share')}
+                onClick={handleShare}
                 disabled={isGenerating}
                 style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
               >
-                {isGenerating ? (
-                  <><div style={styles.spinnerBtn} /><span>Generating…</span></>
-                ) : (
-                  <><IconShare /><span>Share PDF</span></>
-                )}
+                {isGenerating ? generatingLabel : <><IconShare /><span>Share PDF</span></>}
               </button>
             )}
 
-            {/* Download PDF — shown on desktop OR as fallback when share fails */}
-            {(!supportsShare || isPdfError) && (
-              <button
-                id="preview-download-btn"
-                onClick={handleDownload}
-                disabled={isGenerating}
-                style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
-              >
-                {isGenerating ? (
-                  <><div style={styles.spinnerBtn} /><span>Generating…</span></>
-                ) : (
-                  <><IconDownload /><span>Download PDF</span></>
-                )}
-              </button>
-            )}
+            {/* Download PDF — ALWAYS visible (product decision) */}
+            <button
+              id="preview-download-btn"
+              onClick={handleDownload}
+              disabled={isGenerating}
+              style={{
+                ...styles.pdfBtn,
+                opacity: isGenerating ? 0.6 : 1,
+                // Slightly muted when share is also shown
+                ...(supportsShare ? styles.pdfBtnSecondary : {}),
+              }}
+            >
+              {isGenerating ? generatingLabel : <><IconDownload /><span>Download PDF</span></>}
+            </button>
           </div>
 
-          {/* Generating progress note */}
           {isGenerating && (
             <p style={styles.generatingNote} role="status" aria-live="polite">
               Building your PDF — this may take a moment if there are photos.
@@ -518,7 +656,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden', border: '1px solid var(--color-border)',
     background: 'var(--color-background)',
   },
-  photoImg:     { width: '100%', height: '100%', objectFit: 'cover' },
+  photoImg: { width: '100%', height: '100%', objectFit: 'cover' },
   photoLoading: {
     width: '100%', height: '100%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -531,7 +669,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--color-danger)',
     fontSize: '14px',
   },
-  actions: { display: 'flex', gap: '10px', marginTop: '4px' },
+  actions: { display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' as const },
   editBtn: {
     flex: '0 0 auto', minWidth: '96px', minHeight: '48px',
     background: 'var(--color-surface)', color: 'var(--color-primary)',
@@ -540,12 +678,18 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
   },
   pdfBtn: {
-    flex: 1, minHeight: '48px',
+    flex: 1, minWidth: '130px', minHeight: '48px',
     background: 'var(--color-primary)', color: '#fff',
     border: 'none', borderRadius: 'var(--radius-md)',
     fontSize: '15px', fontWeight: 600, cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
     transition: 'opacity 0.15s',
+  },
+  // Secondary styling for Download when Share is also shown
+  pdfBtnSecondary: {
+    background: 'var(--color-surface)',
+    color: 'var(--color-primary)',
+    border: '1px solid var(--color-primary)',
   },
   generatingNote: {
     fontSize: '12px', color: 'var(--color-text-muted)',

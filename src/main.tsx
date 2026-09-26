@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { CompanyProfileProvider } from './context/CompanyProfileContext'
 import { AuthGuard } from './components/AuthGuard'
 import LoginPage from './pages/LoginPage'
 import SignUpPage from './pages/SignUpPage'
@@ -30,26 +31,33 @@ const RootRoute = () => {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<RootRoute />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/signup" element={<SignUpPage />} />
-          <Route path="/reset-password" element={<PasswordResetPage />} />
-          <Route path="/update-password" element={<UpdatePasswordPage />} />
-          
-          <Route path="/onboarding" element={<AuthGuard><OnboardingPage /></AuthGuard>} />
-          <Route path="/projects" element={<AuthGuard><ProjectsPage /></AuthGuard>} />
-          <Route path="/projects/:id" element={<AuthGuard><ProjectDetailPage /></AuthGuard>} />
-          <Route path="/update/:projectId/new" element={<AuthGuard><CreateReportPage /></AuthGuard>} />
-          <Route path="/preview/:reportId" element={<AuthGuard><ReportPreviewPage /></AuthGuard>} />
-          <Route path="/settings" element={<AuthGuard><SettingsPage /></AuthGuard>} />
-          <Route path="/more" element={<AuthGuard><MorePage /></AuthGuard>} />
-          
-          <Route path="/billing/success" element={<BillingSuccessPage />} />
-          <Route path="/billing/cancel" element={<BillingCancelPage />} />
-        </Routes>
-      </BrowserRouter>
+      {/*
+        CompanyProfileProvider wraps the router so ALL routes (AuthGuard,
+        OnboardingPage, etc.) share the same profile state instance.
+        This is the architectural fix for the onboarding bounce bug.
+      */}
+      <CompanyProfileProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<RootRoute />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignUpPage />} />
+            <Route path="/reset-password" element={<PasswordResetPage />} />
+            <Route path="/update-password" element={<UpdatePasswordPage />} />
+
+            <Route path="/onboarding" element={<AuthGuard><OnboardingPage /></AuthGuard>} />
+            <Route path="/projects" element={<AuthGuard><ProjectsPage /></AuthGuard>} />
+            <Route path="/projects/:id" element={<AuthGuard><ProjectDetailPage /></AuthGuard>} />
+            <Route path="/update/:projectId/new" element={<AuthGuard><CreateReportPage /></AuthGuard>} />
+            <Route path="/preview/:reportId" element={<AuthGuard><ReportPreviewPage /></AuthGuard>} />
+            <Route path="/settings" element={<AuthGuard><SettingsPage /></AuthGuard>} />
+            <Route path="/more" element={<AuthGuard><MorePage /></AuthGuard>} />
+
+            <Route path="/billing/success" element={<BillingSuccessPage />} />
+            <Route path="/billing/cancel" element={<BillingCancelPage />} />
+          </Routes>
+        </BrowserRouter>
+      </CompanyProfileProvider>
     </AuthProvider>
   </StrictMode>,
 )

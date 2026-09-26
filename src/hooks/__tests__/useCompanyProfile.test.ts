@@ -1,14 +1,13 @@
 /**
- * useCompanyProfile race-condition tests.
+ * CompanyProfileContext / useCompanyProfile tests.
  *
- * These tests verify the invariant that AuthGuard can never observe
- * (loading=false, profile=null, user!=null) for a user whose profile
- * has not yet been fetched — which was the root cause of the spurious
- * /onboarding redirect on deep-link refresh.
+ * Tests the shared Context that replaced the standalone hook.
+ * All renderHook calls use { wrapper } to provide CompanyProfileProvider.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useCompanyProfile } from '../useCompanyProfile'
+import React from 'react'
+import { CompanyProfileProvider, useCompanyProfile } from '../../context/CompanyProfileContext'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -23,6 +22,12 @@ vi.mock('../../lib/companyProfile', () => ({
 import { useAuth } from '../../context/AuthContext'
 import { getCompanyProfile } from '../../lib/companyProfile'
 
+// ── Wrapper ───────────────────────────────────────────────────────────────────
+
+// All renderHook calls must use this wrapper so the Context value is provided.
+const wrapper = ({ children }: { children: React.ReactNode }) =>
+  React.createElement(CompanyProfileProvider, null, children)
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const mockUser = (id: string) => ({ id, email: `${id}@test.com` })
@@ -34,11 +39,15 @@ const profileRow = {
   onboarding_complete: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+  email: null,
+  phone: null,
+  brand_color: null,
+  logo_storage_path: null,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('useCompanyProfile', () => {
+describe('useCompanyProfile (via CompanyProfileContext)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -46,11 +55,10 @@ describe('useCompanyProfile', () => {
   it('starts loading=true when user is present on first render', async () => {
     vi.mocked(useAuth).mockReturnValue({ user: mockUser('user-1') as any, session: null, loading: false })
 
-    // Make the fetch take a moment so we can inspect the initial state
     let resolveFetch!: (v: typeof profileRow) => void
     vi.mocked(getCompanyProfile).mockReturnValue(new Promise(r => { resolveFetch = r }))
 
-    const { result } = renderHook(() => useCompanyProfile())
+    const { result } = renderHook(() => useCompanyProfile(), { wrapper })
 
     // Immediately after render — must still be loading
     expect(result.current.loading).toBe(true)
@@ -68,7 +76,7 @@ describe('useCompanyProfile', () => {
     let resolveFetch!: (v: typeof profileRow | null) => void
     vi.mocked(getCompanyProfile).mockReturnValue(new Promise(r => { resolveFetch = r }))
 
-    const { result } = renderHook(() => useCompanyProfile())
+    const { result } = renderHook(() => useCompanyProfile(), { wrapper })
 
     // Before fetch completes — must be loading=true (not the dangerous state)
     expect(result.current.loading).toBe(true)
@@ -77,7 +85,6 @@ describe('useCompanyProfile', () => {
     await act(async () => { resolveFetch(null) })
 
     // loading=false, profile=null is allowed ONLY after the fetch completed
-    // confirming there is genuinely no row (not a race)
     expect(result.current.loading).toBe(false)
     expect(result.current.profile).toBeNull()
   })
@@ -86,7 +93,7 @@ describe('useCompanyProfile', () => {
     vi.mocked(useAuth).mockReturnValue({ user: mockUser('user-1') as any, session: null, loading: false })
     vi.mocked(getCompanyProfile).mockResolvedValue(profileRow)
 
-    const { result, rerender } = renderHook(() => useCompanyProfile())
+    const { result, rerender } = renderHook(() => useCompanyProfile(), { wrapper })
 
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.profile?.user_id).toBe('user-1')
@@ -113,7 +120,7 @@ describe('useCompanyProfile', () => {
     vi.mocked(useAuth).mockReturnValue({ user: mockUser('user-1') as any, session: null, loading: false })
     vi.mocked(getCompanyProfile).mockResolvedValue(profileRow)
 
-    const { result, rerender } = renderHook(() => useCompanyProfile())
+    const { result, rerender } = renderHook(() => useCompanyProfile(), { wrapper })
     await waitFor(() => expect(result.current.loading).toBe(false))
 
     // Simulate logout
@@ -130,7 +137,7 @@ describe('useCompanyProfile', () => {
     vi.mocked(useAuth).mockReturnValue({ user: mockUser('user-1') as any, session: null, loading: false })
     vi.mocked(getCompanyProfile).mockRejectedValue(new Error('Network error'))
 
-    const { result } = renderHook(() => useCompanyProfile())
+    const { result } = renderHook(() => useCompanyProfile(), { wrapper })
 
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.error).toBe('Network error')
@@ -138,24 +145,18 @@ describe('useCompanyProfile', () => {
   })
 
   it('session restore: deep-link refresh stays on loading screen until profile is fetched', async () => {
-    // This models the exact deep-link refresh scenario that caused the bug:
-    // 1. Page loads, auth session is restored from cookie
-    // 2. Profile fetch is in flight
-    // 3. AuthGuard must not redirect to /onboarding during step 2
-
     vi.mocked(useAuth).mockReturnValue({ user: mockUser('user-1') as any, session: null, loading: false })
 
     let resolveFetch!: (v: typeof profileRow) => void
     vi.mocked(getCompanyProfile).mockReturnValue(new Promise(r => { resolveFetch = r }))
 
-    const { result } = renderHook(() => useCompanyProfile())
+    const { result } = renderHook(() => useCompanyProfile(), { wrapper })
 
-    // Step 2: fetch in flight — must be loading=true
-    // AuthGuard will show spinner, NOT redirect to /onboarding
+    // Fetch in flight — must be loading=true (AuthGuard shows spinner, NOT redirect)
     expect(result.current.loading).toBe(true)
     expect(result.current.profile).toBeNull()
 
-    // Step 3: fetch completes
+    // Fetch completes
     await act(async () => { resolveFetch(profileRow) })
     expect(result.current.loading).toBe(false)
     expect(result.current.profile?.onboarding_complete).toBe(true)

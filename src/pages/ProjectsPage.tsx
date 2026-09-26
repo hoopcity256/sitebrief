@@ -8,6 +8,7 @@ import { uploadCoverPhoto, removeCoverPhoto, getCoverPhotoUrl } from '../lib/pro
 import { useSubscription } from '../hooks/useSubscription'
 import { redirectToCheckout } from '../lib/subscription'
 import type { ProjectRow } from '../lib/projects'
+import { isValidEmail, formatUSPhone } from '../lib/validation'
 import { AppShell } from '../components/AppShell'
 import { PlusIcon, EllipsisHIcon, ArchiveIcon, CameraIcon, XIcon } from '../components/icons'
 
@@ -487,23 +488,8 @@ interface NewProjectFormProps {
   onCancel: () => void
 }
 
-/**
- * Format a raw digit string as a US phone number: (XXX) XXX-XXXX
- * Called on every keystroke; preserves only digits and reformats.
- */
-function formatUSPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '').slice(0, 10)
-  if (digits.length === 0) return ''
-  if (digits.length <= 3) return `(${digits}`
-  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
-}
+// formatUSPhone and isValidEmail are imported from '../lib/validation'
 
-/** Returns true if the string looks like a plausible email. Not RFC-level. */
-function isValidEmail(v: string): boolean {
-  if (!v) return true // Optional field — empty is fine
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())
-}
 
 function NewProjectForm({ userId, onCreated, onCancel }: NewProjectFormProps) {
   const [name, setName]                   = useState('')

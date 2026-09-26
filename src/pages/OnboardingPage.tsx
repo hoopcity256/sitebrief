@@ -1,16 +1,58 @@
-import { useState } from 'react'
+/**
+ * OnboardingPage — company profile setup, presented once after signup.
+ *
+ * Instrumentation added per hardening pass 2 requirements:
+ *   console.log('[onboarding] <stage>') traces are present in sandbox builds.
+ *   They log only non-sensitive data (stage name, boolean flags, counts).
+ *
+ * Architecture note:
+ *   setProfile() now updates the shared CompanyProfileContext — AuthGuard
+ *   reads from the same context, so it immediately sees onboarding_complete=true
+ *   and does not bounce the user back here.
+ *
+ * Logo upload:
+ *   - Optional company logo uploaded to 'company-logos' bucket.
+ *   - Compressed client-side before upload (JPEG, max 400 KB).
+ *   - Stored as logo_storage_path on company_profiles.
+ *   - Signed URL used for display.
+ */
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useCompanyProfile } from '../hooks/useCompanyProfile'
 import { upsertCompanyProfile } from '../lib/companyProfile'
-import { BuildingIcon } from '../components/icons'
+import { compressImage } from '../lib/imageCompression'
+import { supabase } from '../lib/supabase'
+import { isValidEmail, formatUSPhone } from '../lib/validation'
+import { BuildingIcon, CameraIcon, XIcon } from '../components/icons'
 
-/**
- * Company profile setup — presented once after signup.
- * All form fields, validation, and upsertCompanyProfile logic preserved unchanged.
- * Visual: uses auth-page / onboarding-* CSS classes for the North Star treatment.
- */
+// ── Logo bucket config ──────────────────────────────────────────────────────
+
+const LOGO_BUCKET = 'company-logos'
+
+async function uploadLogo(file: File, userId: string): Promise<string> {
+  // Compress before upload
+  const { blob } = await compressImage(file, {
+    maxLongEdge: 800,
+    targetBytes: 150_000,
+    hardCeilingBytes: 400_000,
+  })
+
+  const ext = 'jpg'
+  const path = `${userId}/logo.${ext}`
+  const { error } = await supabase.storage
+    .from(LOGO_BUCKET)
+    .upload(path, blob, {
+      contentType: 'image/jpeg',
+      upsert: true,
+    })
+  if (error) throw error
+  return path
+}
+
+// ── OnboardingPage ──────────────────────────────────────────────────────────
+
 export const OnboardingPage = () => {
   const { user } = useAuth()
   const { setProfile } = useCompanyProfile()
@@ -19,36 +61,118 @@ export const OnboardingPage = () => {
   const [companyName, setCompanyName] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
+  const [emailError, setEmailError] = useState<string | null>(null)
   const [brandColor, setBrandColor] = useState('#1A5276')
+
+  // Logo
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null)
+  const logoInputRef = useRef<HTMLInputElement>(null)
+
   const [submitting, setSubmitting] = useState(false)
+  const [submitSuccess, setSubmitSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Preserve existing submit logic — unchanged
+  // Phone formatting
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPhone(formatUSPhone(e.target.value))
+  }
+
+  // Email validation on blur
+  const handleEmailBlur = () => {
+    if (email && !isValidEmail(email)) {
+      setEmailError('Please enter a valid email address (e.g. office@company.com).')
+    } else {
+      setEmailError(null)
+    }
+  }
+
+  // Logo selection
+  const handleLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl)
+    setLogoFile(file)
+    setLogoPreviewUrl(URL.createObjectURL(file))
+  }
+
+  const handleLogoRemove = () => {
+    if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl)
+    setLogoFile(null)
+    setLogoPreviewUrl(null)
+    if (logoInputRef.current) logoInputRef.current.value = ''
+  }
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!user) return
+
+    console.log('[onboarding] submit started')
+
+    if (!user) {
+      console.log('[onboarding] no user — aborting')
+      return
+    }
+
+    // Client-side validation
     if (!companyName.trim()) {
       setError('Company name is required.')
+      return
+    }
+    if (email && !isValidEmail(email)) {
+      setEmailError('Please enter a valid email address.')
       return
     }
 
     setSubmitting(true)
     setError(null)
 
+    let logoStoragePath: string | undefined = undefined
+
     try {
+      // Stage 1: Upload logo if selected
+      if (logoFile) {
+        console.log('[onboarding] logo upload start')
+        try {
+          logoStoragePath = await uploadLogo(logoFile, user.id)
+          console.log('[onboarding] logo upload success')
+        } catch (logoErr: unknown) {
+          console.warn('[onboarding] logo upload failed — continuing without logo', logoErr instanceof Error ? logoErr.message : logoErr)
+          // Non-blocking: proceed without logo
+        }
+      }
+
+      // Stage 2: Upsert company profile
+      console.log('[onboarding] upsert start', {
+        hasPhone: Boolean(phone),
+        hasEmail: Boolean(email),
+        hasLogo: Boolean(logoStoragePath),
+      })
+
       const saved = await upsertCompanyProfile(user.id, {
         company_name: companyName.trim(),
-        phone: phone.trim() || null,
+        phone: phone || null,
         email: email.trim() || null,
         brand_color: brandColor || null,
         onboarding_complete: true,
+        ...(logoStoragePath !== undefined && { logo_storage_path: logoStoragePath }),
       })
-      // FIX: Update the AuthGuard's cached profile BEFORE navigating.
-      // Without this, AuthGuard still sees onboarding_complete=false from
-      // the initial fetch and redirects the user back to /onboarding.
+
+      console.log('[onboarding] upsert success', {
+        onboarding_complete: saved?.onboarding_complete,
+        hasProfile: Boolean(saved),
+      })
+
+      // Stage 3: Update shared CompanyProfileContext BEFORE navigation.
+      // This is the critical step: AuthGuard reads from the same Context,
+      // so it immediately sees onboarding_complete=true and allows /projects.
       setProfile(saved)
-      navigate('/projects')
-    } catch {
+      setSubmitSuccess(true)
+
+      console.log('[onboarding] setProfile called, navigating to /projects')
+
+      navigate('/projects', { replace: true })
+    } catch (err: unknown) {
+      console.error('[onboarding] upsert error', err instanceof Error ? err.message : err)
       setError('Could not save your company profile. Please try again.')
     } finally {
       setSubmitting(false)
@@ -74,7 +198,7 @@ export const OnboardingPage = () => {
         </header>
 
         <div className="auth-panel__body">
-          <form onSubmit={handleSubmit} className="auth-form">
+          <form onSubmit={handleSubmit} className="auth-form" noValidate>
             {/* Company Name — required */}
             <div className="auth-field">
               <label htmlFor="onboarding-company-name" className="auth-field-label">
@@ -92,7 +216,7 @@ export const OnboardingPage = () => {
               />
             </div>
 
-            {/* Phone — optional */}
+            {/* Phone — optional, US formatted */}
             <div className="auth-field">
               <label htmlFor="onboarding-phone" className="auth-field-label">
                 Phone
@@ -103,9 +227,10 @@ export const OnboardingPage = () => {
                 className="auth-input"
                 type="tel"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="(555) 123-4567"
+                onChange={handlePhoneChange}
+                placeholder="(912) 555-1234"
                 autoComplete="tel"
+                inputMode="numeric"
               />
             </div>
 
@@ -117,15 +242,68 @@ export const OnboardingPage = () => {
               </label>
               <input
                 id="onboarding-email"
-                className="auth-input"
+                className={`auth-input${emailError ? ' auth-input--error' : ''}`}
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => { setEmail(e.target.value); setEmailError(null) }}
+                onBlur={handleEmailBlur}
                 placeholder="office@company.com"
                 autoComplete="email"
                 autoCapitalize="none"
                 spellCheck={false}
               />
+              {emailError && (
+                <p className="auth-field-error" role="alert">{emailError}</p>
+              )}
+            </div>
+
+            {/* Company Logo — optional */}
+            <div className="auth-field">
+              <span className="auth-field-label">
+                Company Logo
+                <span className="auth-field-label__hint">Optional</span>
+              </span>
+              <p className="auth-field-hint">Used in your PDF report headers.</p>
+
+              {logoPreviewUrl ? (
+                <div className="onboarding-logo-preview">
+                  <img
+                    src={logoPreviewUrl}
+                    alt="Logo preview"
+                    className="onboarding-logo-preview__img"
+                  />
+                  <div className="onboarding-logo-preview__actions">
+                    <button
+                      type="button"
+                      className="onboarding-logo-preview__btn"
+                      onClick={() => logoInputRef.current?.click()}
+                    >
+                      Change
+                    </button>
+                    <button
+                      type="button"
+                      className="onboarding-logo-preview__btn onboarding-logo-preview__btn--remove"
+                      onClick={handleLogoRemove}
+                      aria-label="Remove logo"
+                    >
+                      <XIcon size={14} />
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label className="onboarding-logo-pick">
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleLogoSelect}
+                    style={{ display: 'none' }}
+                  />
+                  <CameraIcon size={16} />
+                  <span>Add Logo</span>
+                </label>
+              )}
             </div>
 
             {/* Brand Color */}
@@ -134,7 +312,6 @@ export const OnboardingPage = () => {
                 Report Accent Color
               </label>
               <div className="onboarding-color-row">
-                {/* Color swatch — clickable */}
                 <div
                   className="onboarding-color-preview"
                   style={{ background: brandColor }}
@@ -159,13 +336,19 @@ export const OnboardingPage = () => {
               </div>
             )}
 
+            {submitSuccess && (
+              <div className="auth-message auth-message--success" role="status">
+                Profile saved! Taking you to your projects…
+              </div>
+            )}
+
             <button
               id="onboarding-submit"
               type="submit"
-              disabled={submitting}
+              disabled={submitting || submitSuccess}
               className="auth-btn-primary"
             >
-              {submitting ? 'Saving…' : 'Get Started'}
+              {submitting ? 'Saving…' : submitSuccess ? 'Done!' : 'Get Started'}
             </button>
           </form>
         </div>
