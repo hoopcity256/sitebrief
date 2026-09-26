@@ -1,36 +1,43 @@
 /**
  * ReportPreviewPage
  *
- * PDF Generation Architecture (hardening pass 2):
+ * PDF Generation Architecture (hardening pass 2 + sandbox diagnostics):
  *
  * Both "Share PDF" and "Download PDF" are always visible.
  * They share the same generated Blob to avoid redundant generation.
  *
- * PDF generation is broken into explicit numbered stages with
- * console.log instrumentation so the EXACT failing stage is captured:
+ * PDF generation is broken into 11 explicit numbered stages with
+ * console.log instrumentation AND in-UI sandbox diagnostics so the
+ * exact failing stage is surfaced directly on the device.
  *
- *   [pdf:1] load report
- *   [pdf:2] load company profile
- *   [pdf:3] load project
- *   [pdf:4] resolve report photos
- *   [pdf:5] create signed URLs
- *   [pdf:6] fetch each image (shows count)
- *   [pdf:7] convert each image to data URL (shows MIME)
- *   [pdf:8] construct ReportPdfData
- *   [pdf:9] render document to Blob (shows size/type)
- *   [pdf:10] validate Blob
+ * Stages:
+ *   [pdf:1]  load report
+ *   [pdf:2]  load company profile
+ *   [pdf:3]  load project
+ *   [pdf:4]  load photo records
+ *   [pdf:5]  create signed photo URLs
+ *   [pdf:6]  count available signed URLs
+ *   [pdf:7]  fetch + decode each photo to data URL
+ *   [pdf:8]  construct PDF data object
+ *   [pdf:9]  render PDF blob
+ *   [pdf:10] validate blob
  *   [pdf:11] share or download
  *
- * Only stage name, error type/message, counts, and Blob metadata are logged.
- * NO signed URLs, auth tokens, or image data are logged.
+ * Sandbox diagnostic panel:
+ *   - Shown when generation fails
+ *   - Displays stage number/label, error.name, sanitized error.message,
+ *     photo counts, MIME type, blob info
+ *   - "Copy diagnostic" button for paste-able text report
+ *   - "Test Text-Only PDF" button isolates renderer vs. image problems
+ *   - NEVER exposes: signed URLs, auth tokens, storage paths, raw image data
  *
  * State machine:
- *   idle           → buttons available
- *   generating     → spinner shown on active button; other button disabled
- *   blob-ready     → Blob in memory; if share fails, Download remains usable
- *   share-failed   → Share PDF shows error; Download PDF still works
- *   download-failed → Download PDF shows error
- *   generation-failed → both show error with retry
+ *   idle            → buttons available
+ *   generating      → spinner shown
+ *   blob-ready      → Blob in memory; Download still usable if Share fails
+ *   share-failed    → Share shows error; Download still works
+ *   download-failed → Download shows error
+ *   generation-failed → both show error with diagnostic panel
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
@@ -60,6 +67,49 @@ interface PhotoData {
   id: string
   storage_path: string
   display_order: number
+}
+
+// ── PDF stage definitions ───────────────────────────────────────────────────
+
+const PDF_STAGES = {
+  1:  'load report',
+  2:  'load company profile',
+  3:  'load project',
+  4:  'load photo records',
+  5:  'create signed photo URLs',
+  6:  'count available signed URLs',
+  7:  'fetch + decode photo',
+  8:  'construct PDF data',
+  9:  'render PDF blob',
+  10: 'validate PDF blob',
+  11: 'share or download',
+} as const
+
+type StageNumber = keyof typeof PDF_STAGES
+
+// ── Sandbox diagnostic state ───────────────────────────────────────────────
+
+interface PdfDiagnostic {
+  stage: StageNumber
+  stageLabel: string
+  errorName: string
+  errorMessage: string
+  /** Total photos in the report */
+  photoCount: number
+  /** Photos that had signed URLs */
+  signedUrlCount: number
+  /** Photos successfully converted to data URLs */
+  resolvedCount: number
+  /** Index of photo being processed when error occurred (if stage 7) */
+  photoIndex: number | null
+  /** MIME type of the photo that caused the error (if stage 7) */
+  lastMime: string | null
+  /** Whether a blob was produced before the error */
+  blobProduced: boolean
+  blobSizeKb: number | null
+  blobType: string | null
+  /** Whether this was a text-only test run */
+  textOnly: boolean
 }
 
 // ── PDF generation state ────────────────────────────────────────────────────
@@ -109,6 +159,48 @@ const IconShare = () => (
   </svg>
 )
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Sanitize an error message for safe display.
+ * Strips any content that looks like a URL, token, or file path.
+ */
+function sanitizeErrorMessage(msg: string): string {
+  return msg
+    // Remove URLs (signed URL parameters are long)
+    .replace(/https?:\/\/[^\s"')]+/gi, '[URL removed]')
+    // Remove anything that looks like a JWT or token (long base64 strings)
+    .replace(/[A-Za-z0-9+/=]{60,}/g, '[token removed]')
+    // Remove storage paths (anything starting with a UUID-like prefix)
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^\s"')]+/gi, '[path removed]')
+    .slice(0, 300) // Hard cap to prevent large dumps
+}
+
+/** Build a paste-friendly diagnostic string from a PdfDiagnostic record. */
+function buildDiagnosticText(d: PdfDiagnostic): string {
+  const lines = [
+    'SiteBrief PDF Diagnostic',
+    '========================',
+    `Stage: ${d.stage}  ${d.stageLabel}`,
+    `Error: ${d.errorName}`,
+    `Message: ${d.errorMessage}`,
+    '',
+    `Photo count: ${d.photoCount}`,
+    `Signed URL count: ${d.signedUrlCount}`,
+    `Resolved (data URL) count: ${d.resolvedCount}`,
+    d.photoIndex !== null ? `Error at photo index: ${d.photoIndex}` : null,
+    d.lastMime ? `Last photo MIME: ${d.lastMime}` : null,
+    '',
+    `Blob produced: ${d.blobProduced ? 'yes' : 'no'}`,
+    d.blobProduced ? `Blob size: ${d.blobSizeKb} KB` : null,
+    d.blobProduced ? `Blob type: ${d.blobType}` : null,
+    '',
+    `Text-only run: ${d.textOnly ? 'yes' : 'no'}`,
+    `User agent: ${navigator.userAgent}`,
+  ]
+  return lines.filter(l => l !== null).join('\n')
+}
+
 // ── ReportPreviewPage ──────────────────────────────────────────────────────
 
 export const ReportPreviewPage = () => {
@@ -132,6 +224,9 @@ export const ReportPreviewPage = () => {
   const [pdfError, setPdfError] = useState<string | null>(null)
   // Cached Blob — reused for Download when Share fails
   const [cachedBlob, setCachedBlob] = useState<{ blob: Blob; filename: string } | null>(null)
+  // Sandbox diagnostic
+  const [diagnostic, setDiagnostic] = useState<PdfDiagnostic | null>(null)
+  const [copyLabel, setCopyLabel] = useState<'copy' | 'copied'>('copy')
 
   const loadReport = useCallback(async () => {
     if (!reportId) return
@@ -176,19 +271,18 @@ export const ReportPreviewPage = () => {
   // ── PDF generation pipeline ──────────────────────────────────────────────
 
   /**
-   * Stage 7: Fetch a signed URL, convert to data URL.
+   * Stage 7: Fetch a single photo signed URL → data URL.
    *
    * @react-pdf/renderer v4 uses a Web Worker which cannot resolve
    * Supabase signed URLs (CORS + CSP constraints in worker context).
    * Converting to data URL in the main thread avoids this entirely.
    *
-   * Logs MIME type to detect HEIC/HEIF from iPhone uploads.
-   * iPhone HEIC that was compressed through our pipeline should be JPEG
-   * (compressImage always uses canvas.toBlob('image/jpeg')).
+   * Returns null + logs MIME if the image cannot be used (HEIC, fetch fail, etc).
    */
   const fetchPhotoAsDataUrl = async (
     signedUrl: string,
     photoIndex: number,
+    diagRef: { lastMime: string | null },
   ): Promise<string | null> => {
     try {
       console.log(`[pdf:7] fetching photo ${photoIndex}`)
@@ -202,6 +296,7 @@ export const ReportPreviewPage = () => {
       const mime = blob.type || 'unknown'
       const sizekb = Math.round(blob.size / 1024)
       console.log(`[pdf:7] photo ${photoIndex} fetched — MIME: ${mime}, size: ${sizekb} KB`)
+      diagRef.lastMime = mime
 
       // HEIC/HEIF cannot be rendered by @react-pdf/renderer — skip them.
       // Our compressImage pipeline should have converted them to JPEG,
@@ -228,36 +323,65 @@ export const ReportPreviewPage = () => {
 
   /**
    * Generate the PDF Blob. Returns the Blob and filename.
-   * Throws with a descriptive stage-annotated error on failure.
+   *
+   * @param textOnly - When true, skip all photos. Used for diagnostic isolation.
+   * @throws A structured Error whose message begins with `[pdf:N]` on failure.
    */
-  const generatePdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
-    if (!report) throw new Error('[pdf] no report loaded')
+  const generatePdfBlob = async (
+    textOnly = false,
+  ): Promise<{ blob: Blob; filename: string; diag: Partial<PdfDiagnostic> }> => {
+    if (!report) throw new Error('[pdf:1] no report loaded')
 
-    console.log('[pdf:8] constructing PDF data')
-    const orderedPhotos = [...photos].sort((a, b) => a.display_order - b.display_order)
-
-    // Stage 6: count how many photos have signed URLs
-    const availablePhotoCount = orderedPhotos.filter(p => photoUrls[p.id]).length
-    console.log(`[pdf:6] photos with signed URLs: ${availablePhotoCount} of ${orderedPhotos.length}`)
-
-    // Stage 7: convert all available photos to data URLs
-    const dataUrls: string[] = []
-    for (let i = 0; i < orderedPhotos.length; i++) {
-      const p = orderedPhotos[i]
-      const signedUrl = photoUrls[p.id]
-      if (!signedUrl) {
-        console.log(`[pdf:7] photo ${i} has no signed URL — skipping`)
-        continue
-      }
-      const dataUrl = await fetchPhotoAsDataUrl(signedUrl, i)
-      if (dataUrl) {
-        dataUrls.push(dataUrl)
-      }
+    // Diagnostic accumulator — safe fields only (no URLs/paths/tokens)
+    const diagAcc: Partial<PdfDiagnostic> & {
+      lastMime: string | null
+      photoIndex: number | null
+    } = {
+      photoCount: photos.length,
+      signedUrlCount: 0,
+      resolvedCount: 0,
+      photoIndex: null,
+      lastMime: null,
+      blobProduced: false,
+      blobSizeKb: null,
+      blobType: null,
+      textOnly,
     }
 
-    console.log(`[pdf:8] data URLs resolved: ${dataUrls.length}`)
+    const orderedPhotos = [...photos].sort((a, b) => a.display_order - b.display_order)
 
-    // Stage 8: build PDF data object
+    // ── Stage 6: count photos with signed URLs ──────────────────────────────
+    console.log('[pdf:6] counting photos with signed URLs')
+    const availablePhotoCount = orderedPhotos.filter(p => photoUrls[p.id]).length
+    diagAcc.signedUrlCount = availablePhotoCount
+    console.log(`[pdf:6] photos with signed URLs: ${availablePhotoCount} of ${orderedPhotos.length}`)
+
+    // ── Stage 7: convert photos to data URLs ────────────────────────────────
+    const dataUrls: string[] = []
+
+    if (!textOnly) {
+      for (let i = 0; i < orderedPhotos.length; i++) {
+        const p = orderedPhotos[i]
+        const signedUrl = photoUrls[p.id]
+        if (!signedUrl) {
+          console.log(`[pdf:7] photo ${i} has no signed URL — skipping`)
+          continue
+        }
+        diagAcc.photoIndex = i
+        const dataUrl = await fetchPhotoAsDataUrl(signedUrl, i, diagAcc)
+        if (dataUrl) {
+          dataUrls.push(dataUrl)
+        }
+      }
+    } else {
+      console.log('[pdf:7] TEXT-ONLY run — skipping all photos')
+    }
+
+    diagAcc.resolvedCount = dataUrls.length
+    console.log(`[pdf:8] data URLs resolved: ${dataUrls.length}${textOnly ? ' (text-only run)' : ''}`)
+
+    // ── Stage 8: build PDF data object ──────────────────────────────────────
+    console.log('[pdf:8] constructing PDF data')
     const pdfData = {
       reportNumber: report.report_number,
       isDraft: report.is_draft,
@@ -272,15 +396,18 @@ export const ReportPreviewPage = () => {
       photoUrls: dataUrls,
     }
 
-    // Stage 9: render to Blob (dynamic import keeps bundle small)
+    // ── Stage 9: render to Blob (dynamic import keeps bundle small) ─────────
     console.log('[pdf:9] importing @react-pdf/renderer and rendering')
     const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
 
     const blob = await generateReportPdfBlob(pdfData)
 
-    // Stage 10: validate Blob
+    // ── Stage 10: validate Blob ──────────────────────────────────────────────
     const blobSizeKb = Math.round(blob.size / 1024)
     const blobType = blob.type
+    diagAcc.blobProduced = true
+    diagAcc.blobSizeKb = blobSizeKb
+    diagAcc.blobType = blobType
     console.log(`[pdf:10] blob produced — size: ${blobSizeKb} KB, type: ${blobType}`)
 
     if (blob.size === 0) {
@@ -296,7 +423,73 @@ export const ReportPreviewPage = () => {
       createdAt: report.created_at,
     })
 
-    return { blob, filename }
+    return { blob, filename, diag: diagAcc }
+  }
+
+  /**
+   * Parse a stage-annotated error message like "[pdf:9] ..."
+   * and return the stage number, or fall back to the given default.
+   */
+  const parseFailedStage = (
+    msg: string,
+    defaultStage: StageNumber,
+  ): StageNumber => {
+    const match = /\[pdf:(\d+)\]/.exec(msg)
+    if (match) {
+      const n = parseInt(match[1], 10) as StageNumber
+      if (n in PDF_STAGES) return n
+    }
+    return defaultStage
+  }
+
+  /**
+   * Build a PdfDiagnostic from a caught error + partial accumulator.
+   */
+  const buildDiagnostic = (
+    err: unknown,
+    partialDiag: Partial<PdfDiagnostic>,
+    defaultStage: StageNumber,
+    textOnly: boolean,
+  ): PdfDiagnostic => {
+    const errorName = err instanceof Error ? err.name : 'UnknownError'
+    const rawMsg = err instanceof Error ? err.message : String(err)
+    const stage = parseFailedStage(rawMsg, defaultStage)
+    return {
+      stage,
+      stageLabel: PDF_STAGES[stage],
+      errorName,
+      errorMessage: sanitizeErrorMessage(rawMsg),
+      photoCount: partialDiag.photoCount ?? 0,
+      signedUrlCount: partialDiag.signedUrlCount ?? 0,
+      resolvedCount: partialDiag.resolvedCount ?? 0,
+      photoIndex: partialDiag.photoIndex ?? null,
+      lastMime: partialDiag.lastMime ?? null,
+      blobProduced: partialDiag.blobProduced ?? false,
+      blobSizeKb: partialDiag.blobSizeKb ?? null,
+      blobType: partialDiag.blobType ?? null,
+      textOnly,
+    }
+  }
+
+  // ── Copy diagnostic to clipboard ──────────────────────────────────────────
+
+  const handleCopyDiagnostic = async () => {
+    if (!diagnostic) return
+    const text = buildDiagnosticText(diagnostic)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopyLabel('copied')
+      setTimeout(() => setCopyLabel('copy'), 2500)
+    } catch {
+      // Clipboard API may be blocked — select the text area as fallback
+      const el = document.getElementById('pdf-diag-text')
+      if (el instanceof HTMLTextAreaElement) {
+        el.select()
+        document.execCommand('copy')
+        setCopyLabel('copied')
+        setTimeout(() => setCopyLabel('copy'), 2500)
+      }
+    }
   }
 
   // ── Share PDF ─────────────────────────────────────────────────────────────
@@ -304,14 +497,15 @@ export const ReportPreviewPage = () => {
   const handleShare = async () => {
     if (pdfStatus === 'generating') return
     setPdfError(null)
+    setDiagnostic(null)
     setPdfStatus('generating')
 
     try {
       let blobPair = cachedBlob
 
-      // Stage 9: generate if not already cached
       if (!blobPair) {
-        blobPair = await generatePdfBlob()
+        const result = await generatePdfBlob(false)
+        blobPair = { blob: result.blob, filename: result.filename }
         setCachedBlob(blobPair)
         setPdfStatus('blob-ready')
       }
@@ -332,13 +526,14 @@ export const ReportPreviewPage = () => {
       }
       const msg = e instanceof Error ? e.message : String(e)
       const isGenFail = msg.startsWith('[pdf:')
-      console.error('[pdf] error:', msg)
+      console.error('[pdf] share error:', msg)
 
       if (isGenFail || !cachedBlob) {
-        setPdfError('Could not generate PDF. See console for the exact failing stage.')
+        const diag = buildDiagnostic(e, {}, 9, false)
+        setDiagnostic(diag)
+        setPdfError('Could not generate PDF.')
         setPdfStatus('generation-failed')
       } else {
-        // PDF was generated but share failed (Web Share API issue)
         setPdfError('Share failed. Use Download PDF to save to your device.')
         setPdfStatus('share-failed')
       }
@@ -350,13 +545,15 @@ export const ReportPreviewPage = () => {
   const handleDownload = async () => {
     if (pdfStatus === 'generating') return
     setPdfError(null)
+    setDiagnostic(null)
     setPdfStatus('generating')
 
     try {
       let blobPair = cachedBlob
 
       if (!blobPair) {
-        blobPair = await generatePdfBlob()
+        const result = await generatePdfBlob(false)
+        blobPair = { blob: result.blob, filename: result.filename }
         setCachedBlob(blobPair)
         setPdfStatus('blob-ready')
       }
@@ -366,9 +563,68 @@ export const ReportPreviewPage = () => {
       setPdfStatus('idle')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      const isGenFail = msg.startsWith('[pdf:')
       console.error('[pdf] download error:', msg)
-      setPdfError('Download failed. Please try again.')
-      setPdfStatus('download-failed')
+
+      if (isGenFail || !cachedBlob) {
+        const diag = buildDiagnostic(e, {}, 9, false)
+        setDiagnostic(diag)
+        setPdfError('Could not generate PDF.')
+        setPdfStatus('generation-failed')
+      } else {
+        setPdfError('Download failed. Please try again.')
+        setPdfStatus('download-failed')
+      }
+    }
+  }
+
+  // ── Text-only PDF test ────────────────────────────────────────────────────
+
+  /**
+   * SANDBOX DIAGNOSTIC ONLY — generates the same report without photos.
+   * If this succeeds and the normal path fails, image handling is the problem.
+   * If this also fails, the core react-pdf rendering pipeline is the problem.
+   */
+  const handleTextOnlyTest = async () => {
+    if (pdfStatus === 'generating') return
+    setPdfError(null)
+    setDiagnostic(null)
+    setPdfStatus('generating')
+
+    try {
+      const result = await generatePdfBlob(true /* textOnly */)
+      // Success: download the text-only PDF so the result is visible
+      console.log('[pdf] text-only test succeeded — downloading')
+      downloadBlob(result.blob, `text-only-test-${result.filename}`)
+      setPdfStatus('idle')
+      setPdfError(null)
+      // Surface success to the user via a brief diagnostic note
+      setDiagnostic({
+        stage: 11,
+        stageLabel: PDF_STAGES[11],
+        errorName: 'Success',
+        errorMessage: 'Text-only PDF generated successfully. Image handling may be the issue.',
+        photoCount: photos.length,
+        signedUrlCount: Object.keys(photoUrls).length,
+        resolvedCount: 0,
+        photoIndex: null,
+        lastMime: null,
+        blobProduced: true,
+        blobSizeKb: Math.round(result.blob.size / 1024),
+        blobType: result.blob.type,
+        textOnly: true,
+      })
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[pdf] text-only test failed:', msg)
+      const diag = buildDiagnostic(e, {
+        photoCount: photos.length,
+        signedUrlCount: 0,
+        resolvedCount: 0,
+      }, 9, true)
+      setDiagnostic(diag)
+      setPdfError('Text-only PDF also failed. Problem is in the PDF renderer itself.')
+      setPdfStatus('generation-failed')
     }
   }
 
@@ -405,6 +661,7 @@ export const ReportPreviewPage = () => {
 
   const isGenerating = pdfStatus === 'generating'
   const supportsShare = canShareFiles()
+  const isGenFailed = pdfStatus === 'generation-failed'
 
   // Status label for generating button
   const generatingLabel = (
@@ -481,10 +738,92 @@ export const ReportPreviewPage = () => {
             </div>
           )}
 
-          {/* PDF error / status */}
+          {/* PDF user-visible error */}
           {pdfError && (
             <div style={styles.pdfError} role="alert">
               {pdfError}
+            </div>
+          )}
+
+          {/* ── Sandbox PDF Diagnostic Panel ─────────────────────────────── */}
+          {diagnostic && (
+            <div style={styles.diagPanel} role="region" aria-label="Sandbox PDF diagnostic">
+              <div style={styles.diagHeader}>
+                <span style={styles.diagBadge}>Sandbox PDF diagnostic</span>
+                <button
+                  onClick={handleCopyDiagnostic}
+                  style={styles.diagCopyBtn}
+                  aria-label="Copy diagnostic text"
+                >
+                  {copyLabel === 'copied' ? '✓ Copied' : 'Copy diagnostic'}
+                </button>
+              </div>
+
+              <table style={styles.diagTable}>
+                <tbody>
+                  <tr>
+                    <td style={styles.diagKey}>Stage</td>
+                    <td style={styles.diagVal}>
+                      <strong>{diagnostic.stage}</strong> — {diagnostic.stageLabel}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Error</td>
+                    <td style={styles.diagVal}>{diagnostic.errorName}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Message</td>
+                    <td style={{ ...styles.diagVal, wordBreak: 'break-word' }}>
+                      {diagnostic.errorMessage}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Photos total</td>
+                    <td style={styles.diagVal}>{diagnostic.photoCount}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Signed URLs</td>
+                    <td style={styles.diagVal}>{diagnostic.signedUrlCount}</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Data URLs resolved</td>
+                    <td style={styles.diagVal}>{diagnostic.resolvedCount}</td>
+                  </tr>
+                  {diagnostic.photoIndex !== null && (
+                    <tr>
+                      <td style={styles.diagKey}>Error at photo</td>
+                      <td style={styles.diagVal}>#{diagnostic.photoIndex}</td>
+                    </tr>
+                  )}
+                  {diagnostic.lastMime && (
+                    <tr>
+                      <td style={styles.diagKey}>Last photo MIME</td>
+                      <td style={styles.diagVal}>{diagnostic.lastMime}</td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={styles.diagKey}>Blob produced</td>
+                    <td style={styles.diagVal}>
+                      {diagnostic.blobProduced
+                        ? `yes — ${diagnostic.blobSizeKb} KB, ${diagnostic.blobType}`
+                        : 'no'}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={styles.diagKey}>Text-only run</td>
+                    <td style={styles.diagVal}>{diagnostic.textOnly ? 'yes' : 'no'}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {/* Hidden textarea for fallback clipboard copy */}
+              <textarea
+                id="pdf-diag-text"
+                readOnly
+                value={diagnostic ? buildDiagnosticText(diagnostic) : ''}
+                style={styles.diagHiddenText}
+                aria-hidden="true"
+              />
             </div>
           )}
 
@@ -538,6 +877,22 @@ export const ReportPreviewPage = () => {
             <p style={styles.generatingNote} role="status" aria-live="polite">
               Building your PDF — this may take a moment if there are photos.
             </p>
+          )}
+
+          {/* ── Sandbox: Text-Only PDF Test ───────────────────────────────── */}
+          {(isGenFailed || !isGenerating) && (
+            <div style={styles.diagActions}>
+              <p style={styles.diagActionsLabel}>Sandbox diagnostic tools:</p>
+              <button
+                id="preview-text-only-btn"
+                onClick={handleTextOnlyTest}
+                disabled={isGenerating}
+                style={styles.diagTestBtn}
+                title="Generate PDF without photos to isolate whether image handling or the PDF renderer is failing"
+              >
+                Test Text-Only PDF
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -668,6 +1023,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--radius-sm)',
     color: 'var(--color-danger)',
     fontSize: '14px',
+    lineHeight: 1.5,
   },
   actions: { display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' as const },
   editBtn: {
@@ -694,5 +1050,93 @@ const styles: Record<string, React.CSSProperties> = {
   generatingNote: {
     fontSize: '12px', color: 'var(--color-text-muted)',
     textAlign: 'center', margin: 0,
+  },
+
+  // ── Sandbox diagnostic panel ────────────────────────────────────────────
+  diagPanel: {
+    background: '#1a1a2e',
+    border: '1px solid #3a3a5c',
+    borderRadius: 'var(--radius-md)',
+    padding: '12px 14px',
+    display: 'flex', flexDirection: 'column', gap: '8px',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+  },
+  diagHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    gap: '8px', flexWrap: 'wrap' as const,
+  },
+  diagBadge: {
+    fontSize: '10px', fontWeight: 700,
+    letterSpacing: '0.08em', textTransform: 'uppercase' as const,
+    color: '#7c7cff',
+    padding: '2px 7px',
+    border: '1px solid #3a3a5c',
+    borderRadius: '4px',
+  },
+  diagCopyBtn: {
+    fontSize: '11px', fontWeight: 600,
+    color: '#a0a0c0',
+    background: 'transparent',
+    border: '1px solid #3a3a5c',
+    borderRadius: '4px',
+    padding: '4px 10px',
+    cursor: 'pointer',
+    transition: 'color 0.15s',
+    whiteSpace: 'nowrap' as const,
+  },
+  diagTable: {
+    width: '100%',
+    borderCollapse: 'collapse' as const,
+  },
+  diagKey: {
+    color: '#7c7cff',
+    fontWeight: 600,
+    padding: '2px 10px 2px 0',
+    verticalAlign: 'top',
+    whiteSpace: 'nowrap' as const,
+    width: '40%',
+  },
+  diagVal: {
+    color: '#e0e0f0',
+    padding: '2px 0',
+    lineHeight: 1.5,
+  },
+  diagHiddenText: {
+    position: 'absolute',
+    left: '-9999px',
+    top: 0,
+    width: '1px',
+    height: '1px',
+    opacity: 0,
+  },
+
+  // ── Sandbox diagnostic actions ──────────────────────────────────────────
+  diagActions: {
+    display: 'flex', flexDirection: 'column', gap: '6px',
+    borderTop: '1px solid var(--color-border)',
+    paddingTop: '10px',
+    marginTop: '2px',
+  },
+  diagActionsLabel: {
+    fontSize: '11px',
+    color: 'var(--color-text-muted)',
+    margin: 0,
+    fontWeight: 600,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase' as const,
+  },
+  diagTestBtn: {
+    alignSelf: 'flex-start',
+    minHeight: '40px',
+    padding: '0 16px',
+    background: 'transparent',
+    border: '1px dashed var(--color-border)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: 'var(--color-text-muted)',
+    cursor: 'pointer',
+    transition: 'border-color 0.15s, color 0.15s',
   },
 }
