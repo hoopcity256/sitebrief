@@ -1,45 +1,38 @@
 /**
- * ReportPreviewPage
+ * ReportPreviewPage — Professional report preview + PDF generation
  *
- * PDF Generation Architecture (hardening pass 2 + sandbox diagnostics):
+ * Preview design:
+ *   Mobile-first. Mirrors the PDF's information hierarchy on screen.
+ *   Company identity → Daily Field Report → Project → Report meta →
+ *   Project info → Narrative sections → Photo grid → Actions
  *
- * Both "Share PDF" and "Download PDF" are always visible.
- * They share the same generated Blob to avoid redundant generation.
+ * PDF generation pipeline (proven on real iPhone):
+ *   Stage 1  load report
+ *   Stage 2  load company profile (+ signed logo URL → data URL)
+ *   Stage 3  load project
+ *   Stage 4  load photo records
+ *   Stage 5  create signed photo URLs
+ *   Stage 6  count available signed URLs
+ *   Stage 7  fetch + decode each photo to data URL (HEIC detection)
+ *   Stage 8  construct ReportPdfData
+ *   Stage 9  render PDF blob (requires 'wasm-unsafe-eval' in CSP)
+ *   Stage 10 validate blob
+ *   Stage 11 share or download
  *
- * PDF generation is broken into 11 explicit numbered stages with
- * console.log instrumentation AND in-UI sandbox diagnostics so the
- * exact failing stage is surfaced directly on the device.
+ * Blob caching:
+ *   Both Share and Download reuse the same generated Blob.
+ *   Blob is invalidated when the page reloads (report data changes).
  *
- * Stages:
- *   [pdf:1]  load report
- *   [pdf:2]  load company profile
- *   [pdf:3]  load project
- *   [pdf:4]  load photo records
- *   [pdf:5]  create signed photo URLs
- *   [pdf:6]  count available signed URLs
- *   [pdf:7]  fetch + decode each photo to data URL
- *   [pdf:8]  construct PDF data object
- *   [pdf:9]  render PDF blob
- *   [pdf:10] validate blob
- *   [pdf:11] share or download
+ * Error states:
+ *   generation-failed → both Share + Download show error, retry available
+ *   share-failed      → Share shows error; Download still works
+ *   download-failed   → Download shows error; Share still available
  *
- * Sandbox diagnostic panel:
- *   - Shown when generation fails
- *   - Displays stage number/label, error.name, sanitized error.message,
- *     photo counts, MIME type, blob info
- *   - "Copy diagnostic" button for paste-able text report
- *   - "Test Text-Only PDF" button isolates renderer vs. image problems
- *   - NEVER exposes: signed URLs, auth tokens, storage paths, raw image data
- *
- * State machine:
- *   idle            → buttons available
- *   generating      → spinner shown
- *   blob-ready      → Blob in memory; Download still usable if Share fails
- *   share-failed    → Share shows error; Download still works
- *   download-failed → Download shows error
- *   generation-failed → both show error with diagnostic panel
+ * CSP requirement (public/_headers):
+ *   script-src must include 'wasm-unsafe-eval'
+ *   DO NOT remove this directive — @react-pdf/renderer uses WebAssembly.
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getReport, listPhotosForReport } from '../lib/reports'
 import { getProject } from '../lib/projects'
@@ -69,50 +62,14 @@ interface PhotoData {
   display_order: number
 }
 
-// ── PDF stage definitions ───────────────────────────────────────────────────
-
-const PDF_STAGES = {
-  1:  'load report',
-  2:  'load company profile',
-  3:  'load project',
-  4:  'load photo records',
-  5:  'create signed photo URLs',
-  6:  'count available signed URLs',
-  7:  'fetch + decode photo',
-  8:  'construct PDF data',
-  9:  'render PDF blob',
-  10: 'validate PDF blob',
-  11: 'share or download',
-} as const
-
-type StageNumber = keyof typeof PDF_STAGES
-
-// ── Sandbox diagnostic state ───────────────────────────────────────────────
-
-interface PdfDiagnostic {
-  stage: StageNumber
-  stageLabel: string
-  errorName: string
-  errorMessage: string
-  /** Total photos in the report */
-  photoCount: number
-  /** Photos that had signed URLs */
-  signedUrlCount: number
-  /** Photos successfully converted to data URLs */
-  resolvedCount: number
-  /** Index of photo being processed when error occurred (if stage 7) */
-  photoIndex: number | null
-  /** MIME type of the photo that caused the error (if stage 7) */
-  lastMime: string | null
-  /** Whether a blob was produced before the error */
-  blobProduced: boolean
-  blobSizeKb: number | null
-  blobType: string | null
-  /** Whether this was a text-only test run */
-  textOnly: boolean
+interface CompanyData {
+  company_name: string
+  phone: string | null
+  email: string | null
+  logo_storage_path: string | null
 }
 
-// ── PDF generation state ────────────────────────────────────────────────────
+// ── PDF status state ────────────────────────────────────────────────────────
 
 type PdfStatus =
   | 'idle'
@@ -121,6 +78,63 @@ type PdfStatus =
   | 'blob-ready'
   | 'share-failed'
   | 'download-failed'
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Format 10-digit phone → (555) 123-4567 */
+function formatPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+  }
+  if (digits.length === 11 && digits[0] === '1') {
+    return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`
+  }
+  return raw
+}
+
+/** Zero-padded report number "004" */
+function padReport(n: number): string {
+  return String(n).padStart(3, '0')
+}
+
+/** Long date for display: "September 26, 2026" */
+function longDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  })
+}
+
+/**
+ * Fetch a URL, convert to data URL.
+ * Returns null on failure (logs to console; does not throw).
+ * Skips HEIC/HEIF — not renderable in @react-pdf/renderer.
+ */
+async function fetchAsDataUrl(url: string, label: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, { mode: 'cors' })
+    if (!res.ok) {
+      console.warn(`[pdf] ${label} fetch failed: HTTP ${res.status}`)
+      return null
+    }
+    const blob = await res.blob()
+    const mime = blob.type || 'unknown'
+    if (mime.includes('heic') || mime.includes('heif')) {
+      console.warn(`[pdf] ${label} is HEIC/HEIF — skipping`)
+      return null
+    }
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload  = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('FileReader failed'))
+      reader.readAsDataURL(blob)
+    })
+  } catch (err: unknown) {
+    console.warn(`[pdf] ${label} error:`, err instanceof Error ? err.message : err)
+    return null
+  }
+}
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────
 
@@ -159,84 +173,50 @@ const IconShare = () => (
   </svg>
 )
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Sanitize an error message for safe display.
- * Strips any content that looks like a URL, token, or file path.
- */
-function sanitizeErrorMessage(msg: string): string {
-  return msg
-    // Remove URLs (signed URL parameters are long)
-    .replace(/https?:\/\/[^\s"')]+/gi, '[URL removed]')
-    // Remove anything that looks like a JWT or token (long base64 strings)
-    .replace(/[A-Za-z0-9+/=]{60,}/g, '[token removed]')
-    // Remove storage paths (anything starting with a UUID-like prefix)
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^\s"')]+/gi, '[path removed]')
-    .slice(0, 300) // Hard cap to prevent large dumps
-}
-
-/** Build a paste-friendly diagnostic string from a PdfDiagnostic record. */
-function buildDiagnosticText(d: PdfDiagnostic): string {
-  const lines = [
-    'SiteBrief PDF Diagnostic',
-    '========================',
-    `Stage: ${d.stage}  ${d.stageLabel}`,
-    `Error: ${d.errorName}`,
-    `Message: ${d.errorMessage}`,
-    '',
-    `Photo count: ${d.photoCount}`,
-    `Signed URL count: ${d.signedUrlCount}`,
-    `Resolved (data URL) count: ${d.resolvedCount}`,
-    d.photoIndex !== null ? `Error at photo index: ${d.photoIndex}` : null,
-    d.lastMime ? `Last photo MIME: ${d.lastMime}` : null,
-    '',
-    `Blob produced: ${d.blobProduced ? 'yes' : 'no'}`,
-    d.blobProduced ? `Blob size: ${d.blobSizeKb} KB` : null,
-    d.blobProduced ? `Blob type: ${d.blobType}` : null,
-    '',
-    `Text-only run: ${d.textOnly ? 'yes' : 'no'}`,
-    `User agent: ${navigator.userAgent}`,
-  ]
-  return lines.filter(l => l !== null).join('\n')
-}
-
 // ── ReportPreviewPage ──────────────────────────────────────────────────────
 
 export const ReportPreviewPage = () => {
   const { reportId } = useParams<{ reportId: string }>()
-  const navigate = useNavigate()
-  const { user } = useAuth()
+  const navigate     = useNavigate()
+  const { user }     = useAuth()
 
-  const [report, setReport] = useState<ReportData | null>(null)
-  const [photos, setPhotos] = useState<PhotoData[]>([])
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({})
-  const [projectName, setProjectName] = useState('')
+  // Report data
+  const [report, setReport]             = useState<ReportData | null>(null)
+  const [photos, setPhotos]             = useState<PhotoData[]>([])
+  const [photoUrls, setPhotoUrls]       = useState<Record<string, string>>({})
+  const [projectName, setProjectName]   = useState('')
   const [customerName, setCustomerName] = useState<string | null>(null)
-  const [address, setAddress] = useState<string | null>(null)
-  const [companyName, setCompanyName] = useState('SiteBrief')
+  const [address, setAddress]           = useState<string | null>(null)
+  const [company, setCompany]           = useState<CompanyData>({
+    company_name: 'SiteBrief',
+    phone: null,
+    email: null,
+    logo_storage_path: null,
+  })
+  // Preview-time signed logo URL (for <img> on screen)
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null)
 
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError]     = useState<string | null>(null)
 
   // PDF state
-  const [pdfStatus, setPdfStatus] = useState<PdfStatus>('idle')
-  const [pdfError, setPdfError] = useState<string | null>(null)
-  // Cached Blob — reused for Download when Share fails
+  const [pdfStatus, setPdfStatus]   = useState<PdfStatus>('idle')
+  const [pdfError, setPdfError]     = useState<string | null>(null)
   const [cachedBlob, setCachedBlob] = useState<{ blob: Blob; filename: string } | null>(null)
-  // Sandbox diagnostic
-  const [diagnostic, setDiagnostic] = useState<PdfDiagnostic | null>(null)
-  const [copyLabel, setCopyLabel] = useState<'copy' | 'copied'>('copy')
+
+  // ── Data loading ─────────────────────────────────────────────────────────
 
   const loadReport = useCallback(async () => {
     if (!reportId) return
     setLoading(true)
     setError(null)
     try {
+      // Stage 1: load report
       const r = await getReport(reportId) as ReportData
       setReport(r)
 
-      const [proj, photoList, company] = await Promise.all([
+      // Stage 2-4: parallel load
+      const [proj, photoList, companyProfile] = await Promise.all([
         getProject(r.project_id),
         listPhotosForReport(reportId),
         user ? getCompanyProfile(user.id) : Promise.resolve(null),
@@ -245,10 +225,27 @@ export const ReportPreviewPage = () => {
       setProjectName(proj.name)
       setCustomerName(proj.customer_name ?? null)
       setAddress(proj.address ?? null)
-      if (company?.company_name) setCompanyName(company.company_name)
+
+      if (companyProfile) {
+        setCompany({
+          company_name: companyProfile.company_name,
+          phone:              companyProfile.phone ?? null,
+          email:              companyProfile.email ?? null,
+          logo_storage_path:  companyProfile.logo_storage_path ?? null,
+        })
+
+        // Resolve preview logo signed URL (for on-screen display)
+        if (companyProfile.logo_storage_path) {
+          const { data: logoData } = await supabase.storage
+            .from('company-logos')
+            .createSignedUrl(companyProfile.logo_storage_path, 3600)
+          if (logoData?.signedUrl) setLogoPreviewUrl(logoData.signedUrl)
+        }
+      }
 
       setPhotos(photoList)
 
+      // Stage 5: create signed photo URLs for preview
       const urls: Record<string, string> = {}
       await Promise.all(
         photoList.map(async (photo) => {
@@ -268,228 +265,82 @@ export const ReportPreviewPage = () => {
 
   useEffect(() => { loadReport() }, [loadReport])
 
-  // ── PDF generation pipeline ──────────────────────────────────────────────
+  // ── PDF generation ───────────────────────────────────────────────────────
 
-  /**
-   * Stage 7: Fetch a single photo signed URL → data URL.
-   *
-   * @react-pdf/renderer v4 uses a Web Worker which cannot resolve
-   * Supabase signed URLs (CORS + CSP constraints in worker context).
-   * Converting to data URL in the main thread avoids this entirely.
-   *
-   * Returns null + logs MIME if the image cannot be used (HEIC, fetch fail, etc).
-   */
-  const fetchPhotoAsDataUrl = async (
-    signedUrl: string,
-    photoIndex: number,
-    diagRef: { lastMime: string | null },
-  ): Promise<string | null> => {
-    try {
-      console.log(`[pdf:7] fetching photo ${photoIndex}`)
-      const res = await fetch(signedUrl, { mode: 'cors' })
-      if (!res.ok) {
-        console.warn(`[pdf:7] photo ${photoIndex} fetch failed: HTTP ${res.status}`)
-        return null
-      }
-
-      const blob = await res.blob()
-      const mime = blob.type || 'unknown'
-      const sizekb = Math.round(blob.size / 1024)
-      console.log(`[pdf:7] photo ${photoIndex} fetched — MIME: ${mime}, size: ${sizekb} KB`)
-      diagRef.lastMime = mime
-
-      // HEIC/HEIF cannot be rendered by @react-pdf/renderer — skip them.
-      // Our compressImage pipeline should have converted them to JPEG,
-      // but verify here as a safety net.
-      if (mime.includes('heic') || mime.includes('heif')) {
-        console.warn(`[pdf:7] photo ${photoIndex} is HEIC/HEIF — skipping (not renderable in PDF)`)
-        return null
-      }
-
-      return await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result as string)
-        reader.onerror = () => {
-          console.warn(`[pdf:7] photo ${photoIndex} FileReader failed`)
-          reject(new Error('FileReader failed'))
-        }
-        reader.readAsDataURL(blob)
-      })
-    } catch (err: unknown) {
-      console.warn(`[pdf:7] photo ${photoIndex} error:`, err instanceof Error ? err.message : err)
-      return null
-    }
-  }
-
-  /**
-   * Generate the PDF Blob. Returns the Blob and filename.
-   *
-   * @param textOnly - When true, skip all photos. Used for diagnostic isolation.
-   * @throws A structured Error whose message begins with `[pdf:N]` on failure.
-   */
-  const generatePdfBlob = async (
-    textOnly = false,
-  ): Promise<{ blob: Blob; filename: string; diag: Partial<PdfDiagnostic> }> => {
+  const generatePdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
     if (!report) throw new Error('[pdf:1] no report loaded')
 
-    // Diagnostic accumulator — safe fields only (no URLs/paths/tokens)
-    const diagAcc: Partial<PdfDiagnostic> & {
-      lastMime: string | null
-      photoIndex: number | null
-    } = {
-      photoCount: photos.length,
-      signedUrlCount: 0,
-      resolvedCount: 0,
-      photoIndex: null,
-      lastMime: null,
-      blobProduced: false,
-      blobSizeKb: null,
-      blobType: null,
-      textOnly,
-    }
-
+    // Stage 6: count photos with signed URLs
     const orderedPhotos = [...photos].sort((a, b) => a.display_order - b.display_order)
+    const available     = orderedPhotos.filter(p => photoUrls[p.id]).length
+    console.log(`[pdf:6] photos with signed URLs: ${available} of ${orderedPhotos.length}`)
 
-    // ── Stage 6: count photos with signed URLs ──────────────────────────────
-    console.log('[pdf:6] counting photos with signed URLs')
-    const availablePhotoCount = orderedPhotos.filter(p => photoUrls[p.id]).length
-    diagAcc.signedUrlCount = availablePhotoCount
-    console.log(`[pdf:6] photos with signed URLs: ${availablePhotoCount} of ${orderedPhotos.length}`)
-
-    // ── Stage 7: convert photos to data URLs ────────────────────────────────
+    // Stage 7: convert photos to data URLs
     const dataUrls: string[] = []
-
-    if (!textOnly) {
-      for (let i = 0; i < orderedPhotos.length; i++) {
-        const p = orderedPhotos[i]
-        const signedUrl = photoUrls[p.id]
-        if (!signedUrl) {
-          console.log(`[pdf:7] photo ${i} has no signed URL — skipping`)
-          continue
-        }
-        diagAcc.photoIndex = i
-        const dataUrl = await fetchPhotoAsDataUrl(signedUrl, i, diagAcc)
-        if (dataUrl) {
-          dataUrls.push(dataUrl)
-        }
+    for (let i = 0; i < orderedPhotos.length; i++) {
+      const p = orderedPhotos[i]
+      if (!photoUrls[p.id]) {
+        console.log(`[pdf:7] photo ${i} — no signed URL, skipping`)
+        continue
       }
-    } else {
-      console.log('[pdf:7] TEXT-ONLY run — skipping all photos')
+      const dataUrl = await fetchAsDataUrl(photoUrls[p.id], `photo ${i}`)
+      if (dataUrl) dataUrls.push(dataUrl)
+    }
+    console.log(`[pdf:7] data URLs resolved: ${dataUrls.length}`)
+
+    // Stage 7b: resolve logo as data URL (non-blocking — logo failure OK)
+    let logoDataUrl: string | null = null
+    if (company.logo_storage_path) {
+      try {
+        const { data: logoSigned } = await supabase.storage
+          .from('company-logos')
+          .createSignedUrl(company.logo_storage_path, 300)
+        if (logoSigned?.signedUrl) {
+          logoDataUrl = await fetchAsDataUrl(logoSigned.signedUrl, 'logo')
+        }
+      } catch {
+        console.warn('[pdf:7b] logo resolution failed — using company name fallback')
+      }
     }
 
-    diagAcc.resolvedCount = dataUrls.length
-    console.log(`[pdf:8] data URLs resolved: ${dataUrls.length}${textOnly ? ' (text-only run)' : ''}`)
+    // Stage 8: construct PDF data
+    console.log('[pdf:8] constructing ReportPdfData')
+    const { reportPdfFilename } = await import('../lib/pdf.tsx')
 
-    // ── Stage 8: build PDF data object ──────────────────────────────────────
-    console.log('[pdf:8] constructing PDF data')
     const pdfData = {
-      reportNumber: report.report_number,
-      isDraft: report.is_draft,
-      createdAt: report.created_at,
-      companyName,
+      reportNumber:  report.report_number,
+      isDraft:       report.is_draft,
+      createdAt:     report.created_at,
+      companyName:   company.company_name,
+      companyPhone:  company.phone,
+      companyEmail:  company.email,
+      logoDataUrl,
       projectName,
       customerName,
       address,
       workCompleted: report.work_completed,
-      problems: report.problems,
-      nextSteps: report.next_steps,
-      photoUrls: dataUrls,
+      problems:      report.problems,
+      nextSteps:     report.next_steps,
+      photoUrls:     dataUrls,
     }
 
-    // ── Stage 9: render to Blob (dynamic import keeps bundle small) ─────────
-    console.log('[pdf:9] importing @react-pdf/renderer and rendering')
-    const { generateReportPdfBlob, reportPdfFilename } = await import('../lib/pdf.tsx')
-
+    // Stage 9: render blob
+    console.log('[pdf:9] rendering PDF blob')
+    const { generateReportPdfBlob } = await import('../lib/pdf.tsx')
     const blob = await generateReportPdfBlob(pdfData)
 
-    // ── Stage 10: validate Blob ──────────────────────────────────────────────
-    const blobSizeKb = Math.round(blob.size / 1024)
-    const blobType = blob.type
-    diagAcc.blobProduced = true
-    diagAcc.blobSizeKb = blobSizeKb
-    diagAcc.blobType = blobType
-    console.log(`[pdf:10] blob produced — size: ${blobSizeKb} KB, type: ${blobType}`)
-
-    if (blob.size === 0) {
-      throw new Error('[pdf:10] generated Blob is empty (0 bytes)')
-    }
-    if (!blobType.includes('pdf')) {
-      console.warn(`[pdf:10] unexpected blob type: ${blobType}`)
-    }
+    // Stage 10: validate
+    console.log(`[pdf:10] blob produced — ${Math.round(blob.size / 1024)} KB, ${blob.type}`)
+    if (blob.size === 0) throw new Error('[pdf:10] generated blob is empty')
 
     const filename = reportPdfFilename({
-      companyName,
+      companyName:  company.company_name,
+      projectName,
       reportNumber: report.report_number,
-      createdAt: report.created_at,
+      createdAt:    report.created_at,
     })
 
-    return { blob, filename, diag: diagAcc }
-  }
-
-  /**
-   * Parse a stage-annotated error message like "[pdf:9] ..."
-   * and return the stage number, or fall back to the given default.
-   */
-  const parseFailedStage = (
-    msg: string,
-    defaultStage: StageNumber,
-  ): StageNumber => {
-    const match = /\[pdf:(\d+)\]/.exec(msg)
-    if (match) {
-      const n = parseInt(match[1], 10) as StageNumber
-      if (n in PDF_STAGES) return n
-    }
-    return defaultStage
-  }
-
-  /**
-   * Build a PdfDiagnostic from a caught error + partial accumulator.
-   */
-  const buildDiagnostic = (
-    err: unknown,
-    partialDiag: Partial<PdfDiagnostic>,
-    defaultStage: StageNumber,
-    textOnly: boolean,
-  ): PdfDiagnostic => {
-    const errorName = err instanceof Error ? err.name : 'UnknownError'
-    const rawMsg = err instanceof Error ? err.message : String(err)
-    const stage = parseFailedStage(rawMsg, defaultStage)
-    return {
-      stage,
-      stageLabel: PDF_STAGES[stage],
-      errorName,
-      errorMessage: sanitizeErrorMessage(rawMsg),
-      photoCount: partialDiag.photoCount ?? 0,
-      signedUrlCount: partialDiag.signedUrlCount ?? 0,
-      resolvedCount: partialDiag.resolvedCount ?? 0,
-      photoIndex: partialDiag.photoIndex ?? null,
-      lastMime: partialDiag.lastMime ?? null,
-      blobProduced: partialDiag.blobProduced ?? false,
-      blobSizeKb: partialDiag.blobSizeKb ?? null,
-      blobType: partialDiag.blobType ?? null,
-      textOnly,
-    }
-  }
-
-  // ── Copy diagnostic to clipboard ──────────────────────────────────────────
-
-  const handleCopyDiagnostic = async () => {
-    if (!diagnostic) return
-    const text = buildDiagnosticText(diagnostic)
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopyLabel('copied')
-      setTimeout(() => setCopyLabel('copy'), 2500)
-    } catch {
-      // Clipboard API may be blocked — select the text area as fallback
-      const el = document.getElementById('pdf-diag-text')
-      if (el instanceof HTMLTextAreaElement) {
-        el.select()
-        document.execCommand('copy')
-        setCopyLabel('copied')
-        setTimeout(() => setCopyLabel('copy'), 2500)
-      }
-    }
+    return { blob, filename }
   }
 
   // ── Share PDF ─────────────────────────────────────────────────────────────
@@ -497,41 +348,33 @@ export const ReportPreviewPage = () => {
   const handleShare = async () => {
     if (pdfStatus === 'generating') return
     setPdfError(null)
-    setDiagnostic(null)
     setPdfStatus('generating')
 
     try {
       let blobPair = cachedBlob
-
       if (!blobPair) {
-        const result = await generatePdfBlob(false)
-        blobPair = { blob: result.blob, filename: result.filename }
+        blobPair = await generatePdfBlob()
         setCachedBlob(blobPair)
         setPdfStatus('blob-ready')
       }
 
-      // Stage 11: share
-      console.log('[pdf:11] attempting Web Share API')
+      console.log('[pdf:11] Web Share API')
       await shareBlob(
         blobPair.blob,
         blobPair.filename,
-        `Report #${report!.report_number} — ${projectName}`,
+        `Report #${padReport(report!.report_number)} — ${projectName}`,
       )
       setPdfStatus('idle')
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
-        // User dismissed the share sheet — not an error
         setPdfStatus(cachedBlob ? 'blob-ready' : 'idle')
         return
       }
       const msg = e instanceof Error ? e.message : String(e)
       const isGenFail = msg.startsWith('[pdf:')
       console.error('[pdf] share error:', msg)
-
       if (isGenFail || !cachedBlob) {
-        const diag = buildDiagnostic(e, {}, 9, false)
-        setDiagnostic(diag)
-        setPdfError('Could not generate PDF.')
+        setPdfError('Could not generate PDF. Please try again.')
         setPdfStatus('generation-failed')
       } else {
         setPdfError('Share failed. Use Download PDF to save to your device.')
@@ -545,31 +388,25 @@ export const ReportPreviewPage = () => {
   const handleDownload = async () => {
     if (pdfStatus === 'generating') return
     setPdfError(null)
-    setDiagnostic(null)
     setPdfStatus('generating')
 
     try {
       let blobPair = cachedBlob
-
       if (!blobPair) {
-        const result = await generatePdfBlob(false)
-        blobPair = { blob: result.blob, filename: result.filename }
+        blobPair = await generatePdfBlob()
         setCachedBlob(blobPair)
         setPdfStatus('blob-ready')
       }
 
-      console.log('[pdf:11] triggering download')
+      console.log('[pdf:11] download')
       downloadBlob(blobPair.blob, blobPair.filename)
       setPdfStatus('idle')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       const isGenFail = msg.startsWith('[pdf:')
       console.error('[pdf] download error:', msg)
-
       if (isGenFail || !cachedBlob) {
-        const diag = buildDiagnostic(e, {}, 9, false)
-        setDiagnostic(diag)
-        setPdfError('Could not generate PDF.')
+        setPdfError('Could not generate PDF. Please try again.')
         setPdfStatus('generation-failed')
       } else {
         setPdfError('Download failed. Please try again.')
@@ -578,65 +415,15 @@ export const ReportPreviewPage = () => {
     }
   }
 
-  // ── Text-only PDF test ────────────────────────────────────────────────────
-
-  /**
-   * SANDBOX DIAGNOSTIC ONLY — generates the same report without photos.
-   * If this succeeds and the normal path fails, image handling is the problem.
-   * If this also fails, the core react-pdf rendering pipeline is the problem.
-   */
-  const handleTextOnlyTest = async () => {
-    if (pdfStatus === 'generating') return
-    setPdfError(null)
-    setDiagnostic(null)
-    setPdfStatus('generating')
-
-    try {
-      const result = await generatePdfBlob(true /* textOnly */)
-      // Success: download the text-only PDF so the result is visible
-      console.log('[pdf] text-only test succeeded — downloading')
-      downloadBlob(result.blob, `text-only-test-${result.filename}`)
-      setPdfStatus('idle')
-      setPdfError(null)
-      // Surface success to the user via a brief diagnostic note
-      setDiagnostic({
-        stage: 11,
-        stageLabel: PDF_STAGES[11],
-        errorName: 'Success',
-        errorMessage: 'Text-only PDF generated successfully. Image handling may be the issue.',
-        photoCount: photos.length,
-        signedUrlCount: Object.keys(photoUrls).length,
-        resolvedCount: 0,
-        photoIndex: null,
-        lastMime: null,
-        blobProduced: true,
-        blobSizeKb: Math.round(result.blob.size / 1024),
-        blobType: result.blob.type,
-        textOnly: true,
-      })
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      console.error('[pdf] text-only test failed:', msg)
-      const diag = buildDiagnostic(e, {
-        photoCount: photos.length,
-        signedUrlCount: 0,
-        resolvedCount: 0,
-      }, 9, true)
-      setDiagnostic(diag)
-      setPdfError('Text-only PDF also failed. Problem is in the PDF renderer itself.')
-      setPdfStatus('generation-failed')
-    }
-  }
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render: loading / error ───────────────────────────────────────────────
 
   if (loading) {
     return (
       <AppShell activeTab="projects">
-        <div style={styles.page}>
-          <div style={styles.center}>
-            <div style={styles.spinner} />
-            <p style={styles.loadingText}>Loading report…</p>
+        <div className="rp-page">
+          <div className="rp-center">
+            <div className="rp-spinner" aria-label="Loading" role="status" />
+            <p className="rp-loading-text">Loading report…</p>
           </div>
         </div>
       </AppShell>
@@ -646,11 +433,13 @@ export const ReportPreviewPage = () => {
   if (error || !report) {
     return (
       <AppShell activeTab="projects">
-        <div style={styles.page}>
-          <div style={styles.center}>
-            <p style={styles.errorText}>{error ?? 'Report not found.'}</p>
-            <button onClick={() => loadReport()} style={styles.retryButton}>Retry</button>
-            <button onClick={() => navigate('/projects')} style={styles.textLink}>
+        <div className="rp-page">
+          <div className="rp-center">
+            <p className="rp-error-msg">{error ?? 'Report not found.'}</p>
+            <button onClick={() => loadReport()} className="rp-btn-primary">
+              Retry
+            </button>
+            <button onClick={() => navigate('/projects')} className="rp-text-link">
               ← Back to Projects
             </button>
           </div>
@@ -661,482 +450,194 @@ export const ReportPreviewPage = () => {
 
   const isGenerating = pdfStatus === 'generating'
   const supportsShare = canShareFiles()
-  const isGenFailed = pdfStatus === 'generation-failed'
-
-  // Status label for generating button
-  const generatingLabel = (
-    <><div style={styles.spinnerBtn} /><span>Generating PDF…</span></>
-  )
+  const orderedPhotos = [...photos].sort((a, b) => a.display_order - b.display_order)
+  const phone = formatPhone(company.phone)
+  const contactParts = [phone, company.email].filter(Boolean)
 
   return (
     <AppShell activeTab="projects">
-      <div style={styles.page}>
-        <header style={styles.header}>
+      <div className="rp-page">
+
+        {/* ── Navigation header ── */}
+        <header className="rp-nav">
           <button
             onClick={() => navigate(`/projects/${report.project_id}`)}
-            style={styles.backBtn}
+            className="rp-nav-back"
             aria-label="Back to project"
           >
             <IconBack />
           </button>
-          <h1 style={styles.heading}>Report #{report.report_number}</h1>
-          <span style={report.is_draft ? styles.badgeDraft : styles.badgeFinal}>
-            {report.is_draft ? 'Draft' : 'Final'}
-          </span>
+          <span className="rp-nav-label">Field Report</span>
+          <button
+            onClick={() => navigate(`/update/${report.project_id}/new?reportId=${report.id}`)}
+            className="rp-nav-edit"
+            aria-label="Edit report"
+          >
+            <IconEdit />
+            <span>Edit</span>
+          </button>
         </header>
 
-        <div style={styles.body}>
-          {/* Meta */}
-          <div style={styles.meta}>
-            <span>{projectName}</span>
-            <span>{new Date(report.created_at).toLocaleDateString()}</span>
+        <div className="rp-body">
+
+          {/* ── Company identity ── */}
+          <div className="rp-company-block">
+            {logoPreviewUrl ? (
+              <img
+                src={logoPreviewUrl}
+                alt={`${company.company_name} logo`}
+                className="rp-company-logo"
+              />
+            ) : (
+              <p className="rp-company-name">{company.company_name}</p>
+            )}
+            {contactParts.length > 0 && (
+              <p className="rp-company-contact">{contactParts.join('  ·  ')}</p>
+            )}
           </div>
 
-          {/* Content */}
+          {/* ── Report identity ── */}
+          <div className="rp-report-id">
+            <p className="rp-doc-type">Daily Field Report</p>
+            <h1 className="rp-project-name">{projectName}</h1>
+            <div className="rp-report-meta">
+              <span className="rp-report-number">
+                Report #{padReport(report.report_number)}
+              </span>
+              <span className="rp-report-date">{longDate(report.created_at)}</span>
+              <span
+                className={report.is_draft ? 'rp-badge-draft' : 'rp-badge-final'}
+                role="status"
+                aria-label={report.is_draft ? 'Draft report' : 'Final report'}
+              >
+                {report.is_draft ? 'Draft' : 'Final'}
+              </span>
+            </div>
+          </div>
+
+          {/* ── Project info ── */}
+          {(customerName || address) && (
+            <div className="rp-info-grid">
+              {customerName && (
+                <div className="rp-info-cell">
+                  <span className="rp-info-label">Customer</span>
+                  <span className="rp-info-value">{customerName}</span>
+                </div>
+              )}
+              {address && (
+                <div className="rp-info-cell">
+                  <span className="rp-info-label">Address</span>
+                  <span className="rp-info-value">{address}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Rule ── */}
+          <hr className="rp-rule" aria-hidden="true" />
+
+          {/* ── Narrative sections ── */}
           {report.work_completed && (
-            <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>Work Completed</h2>
-              <p style={styles.sectionContent}>{report.work_completed}</p>
+            <div className="rp-section">
+              <h2 className="rp-section-heading">Work Completed</h2>
+              <p className="rp-section-body">{report.work_completed}</p>
             </div>
           )}
           {report.problems && (
-            <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>Problems / Delays</h2>
-              <p style={styles.sectionContent}>{report.problems}</p>
+            <div className="rp-section">
+              <h2 className="rp-section-heading">Problems / Delays</h2>
+              <p className="rp-section-body">{report.problems}</p>
             </div>
           )}
           {report.next_steps && (
-            <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>Next Steps</h2>
-              <p style={styles.sectionContent}>{report.next_steps}</p>
+            <div className="rp-section">
+              <h2 className="rp-section-heading">Next Steps</h2>
+              <p className="rp-section-body">{report.next_steps}</p>
             </div>
           )}
 
-          {/* Photos */}
-          {photos.length > 0 && (
-            <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>Photos ({photos.length})</h2>
-              <div style={styles.photoGrid}>
-                {photos
-                  .sort((a, b) => a.display_order - b.display_order)
-                  .map((p) => (
-                    <div key={p.id} style={styles.photoSlot}>
-                      {photoUrls[p.id] ? (
-                        <img
-                          src={photoUrls[p.id]}
-                          alt={`Site photo ${p.display_order + 1}`}
-                          style={styles.photoImg}
-                        />
-                      ) : (
-                        <div style={styles.photoLoading}>
-                          <div style={styles.spinnerSm} />
-                        </div>
-                      )}
-                    </div>
-                  ))}
+          {/* ── Photo grid ── */}
+          {orderedPhotos.length > 0 && (
+            <div className="rp-section">
+              <h2 className="rp-section-heading">
+                Site Photos ({orderedPhotos.length})
+              </h2>
+              <div className="rp-photo-grid">
+                {orderedPhotos.map((p) => (
+                  <div key={p.id} className="rp-photo-cell">
+                    {photoUrls[p.id] ? (
+                      <img
+                        src={photoUrls[p.id]}
+                        alt={`Site photo ${p.display_order + 1}`}
+                        className="rp-photo-img"
+                      />
+                    ) : (
+                      <div className="rp-photo-loading" aria-hidden="true">
+                        <div className="rp-spinner-sm" />
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* PDF user-visible error */}
+          {/* ── PDF error message ── */}
           {pdfError && (
-            <div style={styles.pdfError} role="alert">
+            <div className="rp-pdf-error" role="alert">
               {pdfError}
             </div>
           )}
 
-          {/* ── Sandbox PDF Diagnostic Panel ─────────────────────────────── */}
-          {diagnostic && (
-            <div style={styles.diagPanel} role="region" aria-label="Sandbox PDF diagnostic">
-              <div style={styles.diagHeader}>
-                <span style={styles.diagBadge}>Sandbox PDF diagnostic</span>
+          {/* ── PDF actions ── */}
+          {!report.is_draft && (
+            <div className="rp-pdf-actions">
+              {supportsShare && (
                 <button
-                  onClick={handleCopyDiagnostic}
-                  style={styles.diagCopyBtn}
-                  aria-label="Copy diagnostic text"
+                  id="preview-share-btn"
+                  onClick={handleShare}
+                  disabled={isGenerating}
+                  className="rp-btn-pdf-primary"
+                  aria-label="Share PDF"
                 >
-                  {copyLabel === 'copied' ? '✓ Copied' : 'Copy diagnostic'}
+                  {isGenerating
+                    ? <><div className="rp-spinner-btn" aria-hidden="true" /><span>Generating…</span></>
+                    : <><IconShare /><span>Share PDF</span></>
+                  }
                 </button>
-              </div>
-
-              <table style={styles.diagTable}>
-                <tbody>
-                  <tr>
-                    <td style={styles.diagKey}>Stage</td>
-                    <td style={styles.diagVal}>
-                      <strong>{diagnostic.stage}</strong> — {diagnostic.stageLabel}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Error</td>
-                    <td style={styles.diagVal}>{diagnostic.errorName}</td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Message</td>
-                    <td style={{ ...styles.diagVal, wordBreak: 'break-word' }}>
-                      {diagnostic.errorMessage}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Photos total</td>
-                    <td style={styles.diagVal}>{diagnostic.photoCount}</td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Signed URLs</td>
-                    <td style={styles.diagVal}>{diagnostic.signedUrlCount}</td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Data URLs resolved</td>
-                    <td style={styles.diagVal}>{diagnostic.resolvedCount}</td>
-                  </tr>
-                  {diagnostic.photoIndex !== null && (
-                    <tr>
-                      <td style={styles.diagKey}>Error at photo</td>
-                      <td style={styles.diagVal}>#{diagnostic.photoIndex}</td>
-                    </tr>
-                  )}
-                  {diagnostic.lastMime && (
-                    <tr>
-                      <td style={styles.diagKey}>Last photo MIME</td>
-                      <td style={styles.diagVal}>{diagnostic.lastMime}</td>
-                    </tr>
-                  )}
-                  <tr>
-                    <td style={styles.diagKey}>Blob produced</td>
-                    <td style={styles.diagVal}>
-                      {diagnostic.blobProduced
-                        ? `yes — ${diagnostic.blobSizeKb} KB, ${diagnostic.blobType}`
-                        : 'no'}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={styles.diagKey}>Text-only run</td>
-                    <td style={styles.diagVal}>{diagnostic.textOnly ? 'yes' : 'no'}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              {/* Hidden textarea for fallback clipboard copy */}
-              <textarea
-                id="pdf-diag-text"
-                readOnly
-                value={diagnostic ? buildDiagnosticText(diagnostic) : ''}
-                style={styles.diagHiddenText}
-                aria-hidden="true"
-              />
+              )}
+              <button
+                id="preview-download-btn"
+                onClick={handleDownload}
+                disabled={isGenerating}
+                className={supportsShare ? 'rp-btn-pdf-secondary' : 'rp-btn-pdf-primary'}
+                aria-label="Download PDF"
+              >
+                {isGenerating
+                  ? <><div className="rp-spinner-btn" aria-hidden="true" /><span>Generating…</span></>
+                  : <><IconDownload /><span>Download PDF</span></>
+                }
+              </button>
             </div>
           )}
 
-          {/* Actions */}
-          <div style={styles.actions}>
-            {/* Edit — always visible */}
-            <button
-              id="preview-edit-btn"
-              onClick={() => navigate(`/update/${report.project_id}/new?reportId=${report.id}`)}
-              style={styles.editBtn}
-            >
-              <IconEdit />
-              <span>Edit</span>
-            </button>
-
-            {/*
-              PRODUCT DECISION: Download PDF is ALWAYS visible from the start.
-              Share PDF is shown on devices that support the Web Share API.
-              Both share the same Blob when it has been generated.
-            */}
-
-            {/* Share PDF — only on devices that support it */}
-            {supportsShare && (
-              <button
-                id="preview-share-btn"
-                onClick={handleShare}
-                disabled={isGenerating}
-                style={{ ...styles.pdfBtn, opacity: isGenerating ? 0.6 : 1 }}
-              >
-                {isGenerating ? generatingLabel : <><IconShare /><span>Share PDF</span></>}
-              </button>
-            )}
-
-            {/* Download PDF — ALWAYS visible (product decision) */}
-            <button
-              id="preview-download-btn"
-              onClick={handleDownload}
-              disabled={isGenerating}
-              style={{
-                ...styles.pdfBtn,
-                opacity: isGenerating ? 0.6 : 1,
-                // Slightly muted when share is also shown
-                ...(supportsShare ? styles.pdfBtnSecondary : {}),
-              }}
-            >
-              {isGenerating ? generatingLabel : <><IconDownload /><span>Download PDF</span></>}
-            </button>
-          </div>
+          {/* Draft note */}
+          {report.is_draft && (
+            <div className="rp-draft-note" role="note">
+              This is a draft report. Finalize it to generate a PDF.
+            </div>
+          )}
 
           {isGenerating && (
-            <p style={styles.generatingNote} role="status" aria-live="polite">
+            <p className="rp-generating-note" role="status" aria-live="polite">
               Building your PDF — this may take a moment if there are photos.
             </p>
           )}
 
-          {/* ── Sandbox: Text-Only PDF Test ───────────────────────────────── */}
-          {(isGenFailed || !isGenerating) && (
-            <div style={styles.diagActions}>
-              <p style={styles.diagActionsLabel}>Sandbox diagnostic tools:</p>
-              <button
-                id="preview-text-only-btn"
-                onClick={handleTextOnlyTest}
-                disabled={isGenerating}
-                style={styles.diagTestBtn}
-                title="Generate PDF without photos to isolate whether image handling or the PDF renderer is failing"
-              >
-                Test Text-Only PDF
-              </button>
-            </div>
-          )}
+          {/* ── Footer attribution ── */}
+          <p className="rp-footer-note">Generated with SiteBrief</p>
         </div>
       </div>
     </AppShell>
   )
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    display: 'flex', flexDirection: 'column',
-    minHeight: '100dvh', background: 'var(--color-background)',
-  },
-  center: {
-    flex: 1, display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center',
-    padding: '24px', gap: '16px',
-  },
-  spinner: {
-    width: '30px', height: '30px',
-    border: '2.5px solid var(--color-border)',
-    borderTopColor: 'var(--color-primary)',
-    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-  },
-  spinnerSm: {
-    width: '18px', height: '18px',
-    border: '2px solid var(--color-border)',
-    borderTopColor: 'var(--color-primary)',
-    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-  },
-  spinnerBtn: {
-    width: '16px', height: '16px',
-    border: '2px solid rgba(255,255,255,0.4)',
-    borderTopColor: '#fff',
-    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-    flexShrink: 0,
-  },
-  loadingText: { color: 'var(--color-text-muted)', fontSize: '14px', margin: 0 },
-  errorText: { color: 'var(--color-danger)', fontSize: '15px', margin: 0, textAlign: 'center' },
-  retryButton: {
-    minHeight: '48px', padding: '0 32px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-md)',
-    fontSize: '16px', fontWeight: 600, cursor: 'pointer',
-  },
-  textLink: {
-    background: 'none', border: 'none',
-    color: 'var(--color-primary)', fontSize: '14px',
-    cursor: 'pointer', textDecoration: 'underline', padding: 0,
-  },
-  header: {
-    display: 'flex', alignItems: 'center', gap: '10px',
-    padding: '12px 20px',
-    paddingTop: 'max(12px, env(safe-area-inset-top))',
-    background: 'var(--color-surface)',
-    borderBottom: '1px solid var(--color-border)',
-  },
-  backBtn: {
-    width: '40px', height: '40px',
-    background: 'none', border: '1px solid var(--color-border)',
-    borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0, color: 'var(--color-text)',
-  },
-  heading: {
-    fontSize: '18px', fontWeight: 700, color: 'var(--color-primary)',
-    margin: 0, flex: 1,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
-  badgeDraft: {
-    fontSize: '11px', fontWeight: 700,
-    color: 'var(--color-warning)', background: 'var(--color-warning-soft)',
-    padding: '3px 10px', borderRadius: '20px', flexShrink: 0,
-  },
-  badgeFinal: {
-    fontSize: '11px', fontWeight: 700,
-    color: 'var(--color-success)', background: 'var(--color-success-soft)',
-    padding: '3px 10px', borderRadius: '20px', flexShrink: 0,
-  },
-  body: {
-    padding: '16px',
-    display: 'flex', flexDirection: 'column', gap: '14px',
-    flex: 1,
-    paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
-  },
-  meta: {
-    display: 'flex', justifyContent: 'space-between',
-    fontSize: '12px', color: 'var(--color-text-muted)',
-    flexWrap: 'wrap' as const, gap: '4px',
-  },
-  section: {
-    background: 'var(--color-surface)',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--color-border)',
-    padding: '14px 16px',
-    display: 'flex', flexDirection: 'column', gap: '8px',
-    boxShadow: 'var(--shadow-sm)',
-  },
-  sectionTitle: {
-    fontSize: '11px', fontWeight: 700,
-    letterSpacing: '0.06em', textTransform: 'uppercase' as const,
-    color: 'var(--color-text-muted)', margin: 0,
-  },
-  sectionContent: {
-    fontSize: '15px', color: 'var(--color-text)',
-    margin: 0, lineHeight: 1.65, whiteSpace: 'pre-wrap',
-  },
-  photoGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(88px, 1fr))',
-    gap: '8px',
-  },
-  photoSlot: {
-    aspectRatio: '1', borderRadius: 'var(--radius-sm)',
-    overflow: 'hidden', border: '1px solid var(--color-border)',
-    background: 'var(--color-background)',
-  },
-  photoImg: { width: '100%', height: '100%', objectFit: 'cover' },
-  photoLoading: {
-    width: '100%', height: '100%',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  pdfError: {
-    padding: '12px 14px',
-    background: 'var(--color-danger-soft)',
-    border: '1px solid var(--color-danger)',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--color-danger)',
-    fontSize: '14px',
-    lineHeight: 1.5,
-  },
-  actions: { display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' as const },
-  editBtn: {
-    flex: '0 0 auto', minWidth: '96px', minHeight: '48px',
-    background: 'var(--color-surface)', color: 'var(--color-primary)',
-    border: '1px solid var(--color-primary)', borderRadius: 'var(--radius-md)',
-    fontSize: '15px', fontWeight: 600, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
-  },
-  pdfBtn: {
-    flex: 1, minWidth: '130px', minHeight: '48px',
-    background: 'var(--color-primary)', color: '#fff',
-    border: 'none', borderRadius: 'var(--radius-md)',
-    fontSize: '15px', fontWeight: 600, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
-    transition: 'opacity 0.15s',
-  },
-  // Secondary styling for Download when Share is also shown
-  pdfBtnSecondary: {
-    background: 'var(--color-surface)',
-    color: 'var(--color-primary)',
-    border: '1px solid var(--color-primary)',
-  },
-  generatingNote: {
-    fontSize: '12px', color: 'var(--color-text-muted)',
-    textAlign: 'center', margin: 0,
-  },
-
-  // ── Sandbox diagnostic panel ────────────────────────────────────────────
-  diagPanel: {
-    background: '#1a1a2e',
-    border: '1px solid #3a3a5c',
-    borderRadius: 'var(--radius-md)',
-    padding: '12px 14px',
-    display: 'flex', flexDirection: 'column', gap: '8px',
-    fontFamily: 'monospace',
-    fontSize: '12px',
-  },
-  diagHeader: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    gap: '8px', flexWrap: 'wrap' as const,
-  },
-  diagBadge: {
-    fontSize: '10px', fontWeight: 700,
-    letterSpacing: '0.08em', textTransform: 'uppercase' as const,
-    color: '#7c7cff',
-    padding: '2px 7px',
-    border: '1px solid #3a3a5c',
-    borderRadius: '4px',
-  },
-  diagCopyBtn: {
-    fontSize: '11px', fontWeight: 600,
-    color: '#a0a0c0',
-    background: 'transparent',
-    border: '1px solid #3a3a5c',
-    borderRadius: '4px',
-    padding: '4px 10px',
-    cursor: 'pointer',
-    transition: 'color 0.15s',
-    whiteSpace: 'nowrap' as const,
-  },
-  diagTable: {
-    width: '100%',
-    borderCollapse: 'collapse' as const,
-  },
-  diagKey: {
-    color: '#7c7cff',
-    fontWeight: 600,
-    padding: '2px 10px 2px 0',
-    verticalAlign: 'top',
-    whiteSpace: 'nowrap' as const,
-    width: '40%',
-  },
-  diagVal: {
-    color: '#e0e0f0',
-    padding: '2px 0',
-    lineHeight: 1.5,
-  },
-  diagHiddenText: {
-    position: 'absolute',
-    left: '-9999px',
-    top: 0,
-    width: '1px',
-    height: '1px',
-    opacity: 0,
-  },
-
-  // ── Sandbox diagnostic actions ──────────────────────────────────────────
-  diagActions: {
-    display: 'flex', flexDirection: 'column', gap: '6px',
-    borderTop: '1px solid var(--color-border)',
-    paddingTop: '10px',
-    marginTop: '2px',
-  },
-  diagActionsLabel: {
-    fontSize: '11px',
-    color: 'var(--color-text-muted)',
-    margin: 0,
-    fontWeight: 600,
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
-  },
-  diagTestBtn: {
-    alignSelf: 'flex-start',
-    minHeight: '40px',
-    padding: '0 16px',
-    background: 'transparent',
-    border: '1px dashed var(--color-border)',
-    borderRadius: 'var(--radius-sm)',
-    fontSize: '13px',
-    fontWeight: 500,
-    color: 'var(--color-text-muted)',
-    cursor: 'pointer',
-    transition: 'border-color 0.15s, color 0.15s',
-  },
 }

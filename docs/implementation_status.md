@@ -32,7 +32,10 @@ Working tree: **modified — E2E hardening in progress (uncommitted)**
 | **NS+CP6** | **`84d8ab9`** | **North Star visual transformation + CP6 editor + project cover photos** |
 | **NS Auth** | **`b89574e`** | **North Star auth + onboarding redesign — OWNER APPROVED** |
 | **Deploy** | **`31fb6be`** | **Hosted sandbox deployment complete** |
-| **E2E Hardening** | *(pending commit)* | **Onboarding, PDF, phone/email/cover, trial funnel, duplicate-trial prevention** |
+| **E2E Hardening Pass 2** | `a9f7a3f` | Onboarding, PDF, phone/email/cover, trial funnel, duplicate-trial prevention |
+| **PDF Diagnostics** | `38cc5b2` | Sandbox PDF diagnostic panel (iPhone-accessible, copy-paste) |
+| **CSP WebAssembly fix** | `30b745f` | Added `wasm-unsafe-eval` to CSP — **root cause of all PDF failures CLOSED** |
+| **Preview + Professional PDF** | *(this commit)* | Full report preview redesign + professional PDF document design |
 
 ---
 
@@ -520,6 +523,107 @@ CP8   Professional PDF redesign
 CP9   PWA hardening
 CP10  Final QA / regression
 ```
+
+---
+
+## PREVIEW + PROFESSIONAL PDF — DEPLOYED TO SANDBOX ✅
+
+**Commit:** *(this commit)*
+**Sandbox:** `https://sitebrief-sandbox.pages.dev`
+**Real-device verification:** Still required — PDF infrastructure proven working on iPhone in prior pass.
+
+### Preview Redesign
+
+`ReportPreviewPage.tsx` completely redesigned with mobile-first layout:
+
+| Element | Design |
+|---------|--------|
+| Company identity | Logo (if uploaded) or company name in navy bold — primary header |
+| Contact line | Phone · Email, muted, below logo |
+| Company/report rule | 2px navy bottom border separates identity from report content |
+| Doc type label | "DAILY FIELD REPORT" in uppercase muted caps |
+| Project name | Large bold heading |
+| Report meta row | Report #001 · Date · Status badge |
+| Status badges | `Final` = green pill, `Draft` = amber pill — restrained, not watermark |
+| Project info grid | Customer / Address in 2-column bordered cells |
+| Narrative sections | Heading underlined in navy, body 16px relaxed line-height |
+| Photo grid | 2-column (mobile) / 3-column (≥640px), 4:3 aspect ratio, cover fit |
+| PDF actions (Final) | Share PDF (primary) + Download PDF (secondary), both always visible, 52px touch targets |
+| Draft note | Amber note — PDF actions hidden for drafts |
+| Footer | "Generated with SiteBrief" — small, muted |
+
+### PDF Document Redesign
+
+`src/lib/pdf.tsx` redesigned as a professional construction field report:
+
+| Element | Design |
+|---------|--------|
+| Page size | US Letter portrait (612×792 pt), 48pt horizontal margins |
+| Fixed page header | Company logo (data URL) or company name + "DAILY FIELD REPORT" label — repeats every page |
+| Report identity | Project name (18pt bold), Report #004, long date, status badge |
+| Project info table | Bordered cell grid — Company, Customer, Address, Contact — only populated fields rendered |
+| Narrative sections | Uppercase navy label with rule, 10pt body, 1.6 line-height |
+| Empty sections | Omitted entirely (not blank cards) |
+| Photo grid | 2-column, `wrap={false}` per row prevents page-break splits, odd final photo stays at consistent width |
+| Fixed footer | "Generated with SiteBrief · Project · Report #" + "Page X of Y" — repeats every page |
+| Status treatment | Small colored pill badge (green=final, amber=draft) — no watermark |
+| Typography | Helvetica system (built into react-pdf) — no remote font dependencies |
+| Color palette | Navy / dark ink / light gray / white — grayscale-safe |
+
+### Company Logo Integration
+
+- **On-screen preview:** Signed URL from `company-logos` bucket, standard `<img>` tag
+- **PDF generation:** Logo re-fetched as data URL using `fetchAsDataUrl()` at generation time (same proven pipeline as report photos)
+- **Failure mode:** If logo fetch fails → falls back to company name text — PDF still generates
+
+### Blob Caching
+
+- First PDF generation stores `{ blob, filename }` in `cachedBlob` state
+- Both Share and Download consume the cached blob — no double render
+- Cache invalidated when page unmounts (user navigates away = data may have changed)
+
+### Filename Format
+
+`Company_Project_Report-004_2026-09-26.pdf`
+
+- Company name sanitized, capped at 20 chars
+- Project name sanitized, capped at 20 chars
+- Report number zero-padded to 3 digits
+- Date from report created_at ISO string
+
+### Share / Download Behavior
+
+| Status | Share | Download |
+|--------|-------|----------|
+| Final report, not yet generated | Both visible, both active |
+| Generating | Both disabled, spinner shown |
+| Generation failed | Both visible, error banner above |
+| Share failed | Error "Use Download PDF instead" |
+| Download failed | Error "Please try again" |
+| Draft | Both hidden; amber draft note shown |
+
+### Test Cases Supported
+
+| Case | Behavior |
+|------|----------|
+| A: Short, no photos | PDF renders text-only; no photo section |
+| B: 1 photo | Single photo in left column, right cell empty (no stretch) |
+| C: 3 photos | 2+1 rows; odd row left-aligned at consistent width |
+| D: Long narrative, multiple photos | Natural pagination; headings not orphaned (react-pdf default) |
+| E: 10 photos | 5 rows × 2, all with `wrap={false}` |
+| F: Logo present | Logo image in PDF header and on-screen header |
+| G: No logo | Company name typographic fallback |
+| H: Empty sections | Sections omitted entirely — no blank cards |
+
+### Files Changed This Phase
+
+| File | Change |
+|------|--------|
+| `src/lib/pdf.tsx` | Complete redesign — professional document, logo support, 2-col photo grid with row page-break protection, fixed header/footer, page numbers |
+| `src/pages/ReportPreviewPage.tsx` | Complete redesign — debug UI removed, company identity first, mobile-first layout, logo preview, blob caching |
+| `src/index.css` | Appended all `rp-*` CSS classes (460 lines) |
+| `src/lib/__tests__/pdf.test.ts` | New — 12 tests for `reportPdfFilename` |
+| `docs/implementation_status.md` | Updated |
 
 ---
 
